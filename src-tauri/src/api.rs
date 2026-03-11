@@ -91,45 +91,38 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
         tasks: vec![],
         total_seconds: 0,
     });
+    let mut summary_map = std::collections::HashMap::with_capacity(summary.tasks.len());
+    for st in &summary.tasks {
+        summary_map.insert(st.task_id, st.total_seconds);
+    }
 
     // Get running status
     let status = get_status(token).ok();
-    let running_task_id = status
-        .as_ref()
-        .filter(|s| s.running)
-        .and_then(|s| s.task.as_ref().map(|t| t.id));
-    let running_elapsed = status
-        .as_ref()
-        .filter(|s| s.running)
-        .and_then(|s| s.elapsed_seconds)
-        .unwrap_or(0);
+    let (running_task_id, running_elapsed) = match status.as_ref().filter(|s| s.running) {
+        Some(s) => (
+            s.task.as_ref().map(|t| t.id),
+            s.elapsed_seconds.unwrap_or(0),
+        ),
+        None => (None, 0),
+    };
 
-    let tasks = api_tasks
-        .into_iter()
-        .map(|t| {
-            let is_running = running_task_id == Some(t.id);
-            let summary_elapsed = summary
-                .tasks
-                .iter()
-                .find(|st| st.task_id == t.id)
-                .map(|st| st.total_seconds)
-                .unwrap_or(0);
-            // If this task is running, add the live elapsed from status
-            let elapsed = if is_running {
-                summary_elapsed + running_elapsed
-            } else {
-                summary_elapsed
-            };
-
-            Task {
-                id: t.id,
-                name: t.name,
-                budget_secs: ((t.max_hours.unwrap_or(8.0)) * 3600.0) as i64,
-                elapsed_secs: elapsed,
-                running: is_running,
-            }
-        })
-        .collect();
+    let mut tasks = Vec::with_capacity(api_tasks.len());
+    for t in api_tasks {
+        let is_running = running_task_id == Some(t.id);
+        let summary_elapsed = summary_map.get(&t.id).copied().unwrap_or(0);
+        let elapsed = if is_running {
+            summary_elapsed + running_elapsed
+        } else {
+            summary_elapsed
+        };
+        tasks.push(Task {
+            id: t.id,
+            name: t.name,
+            budget_secs: ((t.max_hours.unwrap_or(8.0)) * 3600.0) as i64,
+            elapsed_secs: elapsed,
+            running: is_running,
+        });
+    }
 
     Ok(tasks)
 }

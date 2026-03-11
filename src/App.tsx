@@ -49,6 +49,8 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [taskSearch, setTaskSearch] = useState("");
   const [idleEvent, setIdleEvent] = useState<IdleEvent | null>(null);
+  const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
+  const [quitError, setQuitError] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityStats>({
     active_secs: 0,
     idle_secs: 0,
@@ -103,11 +105,16 @@ function App() {
     const unlisten3 = listen<ActivityStats>("activity-update", (event) => {
       setActivity(event.payload);
     });
+    const unlisten4 = listen("request-quit-with-running", () => {
+      setQuitError(null);
+      setQuitConfirmOpen(true);
+    });
 
     return () => {
       unlisten1.then((fn) => fn());
       unlisten2.then((fn) => fn());
       unlisten3.then((fn) => fn());
+      unlisten4.then((fn) => fn());
     };
   }, [refreshTasks]);
 
@@ -142,6 +149,17 @@ function App() {
     setIdleEvent(null);
   };
 
+  const handleConfirmQuit = async () => {
+    setQuitError(null);
+    try {
+      await invoke<Task[]>("stop_timer");
+    } catch {
+      setQuitError("Failed to stop the running timer. Please try again.");
+      return;
+    }
+    await invoke("quit_app");
+  };
+
   const filteredTasks = tasks.filter((t) =>
     t.name.toLowerCase().includes(taskSearch.toLowerCase()),
   );
@@ -156,7 +174,6 @@ function App() {
       : activity.activity_percent >= 50
         ? "text-yellow-600"
         : "text-red-600";
-
 
   return (
     <div className="h-screen flex bg-gray-100 text-gray-800 select-none overflow-hidden">
@@ -188,8 +205,18 @@ function App() {
               className="text-gray-400 hover:text-red-500 transition-colors shrink-0"
               title="Logout"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                />
               </svg>
             </button>
           </div>
@@ -284,6 +311,7 @@ function App() {
         <div className="flex-1 overflow-y-auto">
           {filteredTasks.map((task) => {
             const isActive = task.running;
+            const isExceeded = task.elapsed_secs > task.budget_secs;
 
             return (
               <div
@@ -306,6 +334,17 @@ function App() {
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
+                  {isExceeded && (
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-semibold tracking-wide ${
+                        isActive
+                          ? "bg-red-500/20 text-red-200"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      Time Exceeded
+                    </span>
+                  )}
                   <span
                     className={`text-sm font-mono ${isActive ? "text-purple-200" : "text-gray-500"}`}
                   >
@@ -355,10 +394,17 @@ function App() {
             <h3 className="text-sm font-semibold text-gray-800">
               {selectedTask.name}
             </h3>
-            <p className="text-xs text-gray-400 mt-1">
-              Elapsed: {formatHms(selectedTask.elapsed_secs)} / Budget:{" "}
-              {formatHms(selectedTask.budget_secs)}
-            </p>
+            <div className="flex items-center gap-2 mt-1">
+              {selectedTask.elapsed_secs > selectedTask.budget_secs && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold tracking-wide bg-red-100 text-red-700">
+                  Time Exceeded
+                </span>
+              )}
+              <p className="text-xs text-gray-400">
+                Elapsed: {formatHms(selectedTask.elapsed_secs)} / Budget:{" "}
+                {formatHms(selectedTask.budget_secs)}
+              </p>
+            </div>
           </div>
         )}
 
@@ -416,8 +462,18 @@ function App() {
               className="flex items-center gap-1 text-gray-500 hover:text-purple-600 transition-colors"
               title="Refresh tasks from server"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              <svg
+                className="w-3.5 h-3.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
               </svg>
               Refresh
             </button>
@@ -485,6 +541,60 @@ function App() {
                 className="flex-1 bg-gray-200 text-gray-800 rounded-md py-2.5 text-sm font-medium hover:bg-gray-300 transition-colors"
               >
                 Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quit Confirmation Modal */}
+      {quitConfirmOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <svg
+                  className="w-5 h-5 text-red-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  Stop timer before quitting?
+                </h2>
+                <p className="text-xs text-gray-400">
+                  A timer is running. Stopping it will sync time to the server.
+                </p>
+              </div>
+            </div>
+
+            {quitError && (
+              <div className="bg-red-50 text-red-700 text-xs rounded-md px-3 py-2 mb-3">
+                {quitError}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setQuitConfirmOpen(false)}
+                className="flex-1 bg-gray-200 text-gray-800 rounded-md py-2.5 text-sm font-medium hover:bg-gray-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmQuit}
+                className="flex-1 bg-red-600 text-white rounded-md py-2.5 text-sm font-medium hover:bg-red-700 transition-colors"
+              >
+                Stop and Quit
               </button>
             </div>
           </div>

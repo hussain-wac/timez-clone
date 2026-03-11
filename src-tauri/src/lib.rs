@@ -4,7 +4,7 @@ mod idle;
 mod models;
 mod timer_state;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::tray::TrayIconBuilder;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
@@ -45,7 +45,24 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            app.exit(0);
+                            let should_confirm = {
+                                let timer_state = app.state::<timer_state::TimerState>();
+                                timer_state
+                                    .inner()
+                                    .lock()
+                                    .ok()
+                                    .and_then(|s| s.running_task_id)
+                                    .is_some()
+                            };
+                            if should_confirm {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                                app.emit("request-quit-with-running", ()).ok();
+                            } else {
+                                app.exit(0);
+                            }
                         }
                         _ => {}
                     }
@@ -89,6 +106,7 @@ pub fn run() {
             commands::start_google_auth,
             commands::validate_token,
             commands::logout,
+            commands::quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

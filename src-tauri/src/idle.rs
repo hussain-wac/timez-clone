@@ -70,6 +70,7 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
         let mut idle_started_at: Option<chrono::DateTime<Utc>> = None;
         let mut paused_task_id: Option<i64> = None;
         let mut paused_task_name: Option<String> = None;
+        let mut log_counter: u64 = 0;
 
         loop {
             std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
@@ -96,15 +97,12 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
             let user_is_active = system_idle_secs < POLL_INTERVAL_SECS + 1;
 
             // Log every 10 iterations (~20 seconds) to reduce noise
-            static mut LOG_COUNTER: u64 = 0;
-            unsafe {
-                LOG_COUNTER += 1;
-                if LOG_COUNTER % 10 == 0 {
-                    eprintln!(
-                        "[idle] status: idle_ms={}, is_idle={}, paused_task={:?}",
-                        idle_ms, is_idle, paused_task_id
-                    );
-                }
+            log_counter += 1;
+            if log_counter % 10 == 0 {
+                eprintln!(
+                    "[idle] status: idle_ms={}, is_idle={}, paused_task={:?}",
+                    idle_ms, is_idle, paused_task_id
+                );
             }
 
             // Update activity tracker

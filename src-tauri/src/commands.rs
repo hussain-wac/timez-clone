@@ -144,3 +144,9 @@ pub fn logout(auth: State<'_, AuthToken>) -> Result<(), String> {
     auth_state.access_token = None;
     Ok(())
 }
+
+#[tauri::command]
+pub fn quit_app(app_handle: AppHandle) -> Result<(), String> {
+    app_handle.exit(0);
+    Ok(())
+}

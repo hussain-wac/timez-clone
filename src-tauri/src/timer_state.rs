@@ -41,34 +41,36 @@ impl TimerStateInner {
     /// Get tasks with locally computed elapsed time
     pub fn get_tasks(&self) -> Vec<Task> {
         let now = Utc::now();
-        self.cached_tasks
-            .iter()
-            .map(|t| {
-                let base = self.base_elapsed.get(&t.id).copied().unwrap_or(t.elapsed_secs);
-                let live_elapsed = if self.running_task_id == Some(t.id) {
-                    self.timer_started_at
-                        .map(|started| (now - started).num_seconds().max(0))
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
-                Task {
-                    id: t.id,
-                    name: t.name.clone(),
-                    budget_secs: t.budget_secs,
-                    elapsed_secs: base + live_elapsed,
-                    running: self.running_task_id == Some(t.id),
-                }
-            })
-            .collect()
+        let mut out = Vec::with_capacity(self.cached_tasks.len());
+        let running_id = self.running_task_id;
+        let live_elapsed = if let (Some(_), Some(started)) = (running_id, self.timer_started_at) {
+            (now - started).num_seconds().max(0)
+        } else {
+            0
+        };
+
+        for t in &self.cached_tasks {
+            let base = self.base_elapsed.get(&t.id).copied().unwrap_or(t.elapsed_secs);
+            let is_running = running_id == Some(t.id);
+            out.push(Task {
+                id: t.id,
+                name: t.name.clone(),
+                budget_secs: t.budget_secs,
+                elapsed_secs: base + if is_running { live_elapsed } else { 0 },
+                running: is_running,
+            });
+        }
+
+        out
     }
 
     /// Sync cached data from the external API
     pub fn sync_from_api(&mut self, token: &Option<String>) {
         if let Ok(tasks) = api::list_tasks(token) {
-            // Store base elapsed from API for each task
+            // Rebuild base elapsed from API to avoid stale entries
+            let mut base_elapsed = std::collections::HashMap::with_capacity(tasks.len());
             for t in &tasks {
-                self.base_elapsed.insert(t.id, t.elapsed_secs);
+                base_elapsed.insert(t.id, t.elapsed_secs);
             }
 
             // If a task is running according to API, adopt that state
@@ -82,13 +84,14 @@ impl TimerStateInner {
                 if self.running_task_id == Some(running.id) {
                     if let Ok(status) = api::get_status(token) {
                         let api_live = status.elapsed_seconds.unwrap_or(0);
-                        if let Some(base) = self.base_elapsed.get_mut(&running.id) {
+                        if let Some(base) = base_elapsed.get_mut(&running.id) {
                             *base = running.elapsed_secs - api_live;
                         }
                     }
                 }
             }
 
+            self.base_elapsed = base_elapsed;
             self.cached_tasks = tasks
                 .into_iter()
                 .map(|t| Task {
