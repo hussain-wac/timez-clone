@@ -24,9 +24,11 @@ pub fn run() {
 
             // Build system tray menu
             let show_item = MenuItemBuilder::with_id("show", "Show Window").build(app)?;
+            let toggle_item = MenuItemBuilder::with_id("toggle_timer", "Pause/Resume Task").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show_item)
+                .item(&toggle_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
@@ -45,7 +47,11 @@ pub fn run() {
                             }
                         }
                         "quit" => {
-                            let should_confirm = {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                            let running = {
                                 let timer_state = app.state::<timer_state::TimerState>();
                                 timer_state
                                     .inner()
@@ -54,14 +60,43 @@ pub fn run() {
                                     .and_then(|s| s.running_task_id)
                                     .is_some()
                             };
-                            if should_confirm {
-                                if let Some(window) = app.get_webview_window("main") {
+                            app.emit("request-quit-confirm", running).ok();
+                        }
+                        "toggle_timer" => {
+                            let token = {
+                                let auth = app.state::<api::AuthToken>();
+                                auth.inner().lock().ok().and_then(|s| s.access_token.clone())
+                            };
+
+                            let running_task_id = {
+                                let timer_state = app.state::<timer_state::TimerState>();
+                                timer_state.inner().lock().ok().and_then(|s| s.running_task_id)
+                            };
+
+                            if running_task_id.is_some() {
+                                let timer_state = app.state::<timer_state::TimerState>();
+                                if let Ok(mut s) = timer_state.inner().lock() {
+                                    if s.stop_current(&token).is_ok() {
+                                        app.emit("timer-stopped", ()).ok();
+                                    }
+                                }
+                            } else {
+                                let last_task_id = {
+                                    let timer_state = app.state::<timer_state::TimerState>();
+                                    timer_state.inner().lock().ok().and_then(|s| s.last_task_id)
+                                };
+
+                                if let Some(task_id) = last_task_id {
+                                    let timer_state = app.state::<timer_state::TimerState>();
+                                    if let Ok(mut s) = timer_state.inner().lock() {
+                                        if s.start_task(task_id, &token).is_ok() {
+                                            app.emit("timer-started", ()).ok();
+                                        }
+                                    }
+                                } else if let Some(window) = app.get_webview_window("main") {
                                     let _ = window.show();
                                     let _ = window.set_focus();
                                 }
-                                app.emit("request-quit-with-running", ()).ok();
-                            } else {
-                                app.exit(0);
                             }
                         }
                         _ => {}

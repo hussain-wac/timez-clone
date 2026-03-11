@@ -50,6 +50,7 @@ function App() {
   const [taskSearch, setTaskSearch] = useState("");
   const [idleEvent, setIdleEvent] = useState<IdleEvent | null>(null);
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
+  const [quitHasRunning, setQuitHasRunning] = useState(false);
   const [quitError, setQuitError] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityStats>({
     active_secs: 0,
@@ -105,8 +106,9 @@ function App() {
     const unlisten3 = listen<ActivityStats>("activity-update", (event) => {
       setActivity(event.payload);
     });
-    const unlisten4 = listen("request-quit-with-running", () => {
+    const unlisten4 = listen<boolean>("request-quit-confirm", (event) => {
       setQuitError(null);
+      setQuitHasRunning(!!event.payload);
       setQuitConfirmOpen(true);
     });
 
@@ -151,11 +153,13 @@ function App() {
 
   const handleConfirmQuit = async () => {
     setQuitError(null);
-    try {
-      await invoke<Task[]>("stop_timer");
-    } catch {
-      setQuitError("Failed to stop the running timer. Please try again.");
-      return;
+    if (quitHasRunning) {
+      try {
+        await invoke<Task[]>("stop_timer");
+      } catch {
+        setQuitError("Failed to stop the running timer. Please try again.");
+        return;
+      }
     }
     await invoke("quit_app");
   };
@@ -569,10 +573,12 @@ function App() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-gray-800">
-                  Stop timer before quitting?
+                  Quit the app?
                 </h2>
                 <p className="text-xs text-gray-400">
-                  A timer is running. Stopping it will sync time to the server.
+                  {quitHasRunning
+                    ? "A timer is running. Stopping it will sync time to the server."
+                    : "Your data is up to date. You can quit safely."}
                 </p>
               </div>
             </div>
@@ -594,7 +600,7 @@ function App() {
                 onClick={handleConfirmQuit}
                 className="flex-1 bg-red-600 text-white rounded-md py-2.5 text-sm font-medium hover:bg-red-700 transition-colors"
               >
-                Stop and Quit
+                {quitHasRunning ? "Stop and Quit" : "Quit"}
               </button>
             </div>
           </div>

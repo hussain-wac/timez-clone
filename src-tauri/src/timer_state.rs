@@ -17,6 +17,8 @@ pub struct TimerStateInner {
     pub running_task_id: Option<i64>,
     /// When the current timer was started (local clock)
     pub timer_started_at: Option<chrono::DateTime<Utc>>,
+    /// Last task id we ran (used for resume)
+    pub last_task_id: Option<i64>,
     /// Last time we synced with the external API
     pub last_sync_at: chrono::DateTime<Utc>,
     /// Elapsed seconds accumulated before current run (from API summary)
@@ -33,6 +35,7 @@ impl TimerStateInner {
             cached_tasks: vec![],
             running_task_id: None,
             timer_started_at: None,
+            last_task_id: None,
             last_sync_at: chrono::DateTime::<Utc>::MIN_UTC,
             base_elapsed: std::collections::HashMap::new(),
         }
@@ -78,6 +81,7 @@ impl TimerStateInner {
                 if self.running_task_id.is_none() {
                     self.running_task_id = Some(running.id);
                     self.timer_started_at = Some(Utc::now());
+                    self.last_task_id = Some(running.id);
                 }
                 // Subtract the live elapsed that API already includes
                 // so we don't double-count
@@ -120,6 +124,7 @@ impl TimerStateInner {
         api::start_timer(task_id, token)?;
         self.running_task_id = Some(task_id);
         self.timer_started_at = Some(Utc::now());
+        self.last_task_id = Some(task_id);
         Ok(())
     }
 
@@ -133,21 +138,30 @@ impl TimerStateInner {
         api::start_timer(task_id, token)?;
         self.running_task_id = Some(task_id);
         self.timer_started_at = Some(Utc::now());
+        self.last_task_id = Some(task_id);
         Ok(())
     }
 
-    /// Stop the currently running timer (calls API + updates local state)
-    pub fn stop_current(&mut self, token: &Option<String>) -> Result<(), String> {
+    /// Stop the currently running timer locally (no API call)
+    pub fn stop_current_local(&mut self) -> Option<i64> {
         if let Some(task_id) = self.running_task_id {
-            // Accumulate elapsed time into base
             if let Some(started) = self.timer_started_at {
                 let elapsed = (Utc::now() - started).num_seconds().max(0);
                 let base = self.base_elapsed.entry(task_id).or_insert(0);
                 *base += elapsed;
             }
-            api::stop_timer(task_id, token)?;
             self.running_task_id = None;
             self.timer_started_at = None;
+            self.last_task_id = Some(task_id);
+            return Some(task_id);
+        }
+        None
+    }
+
+    /// Stop the currently running timer (calls API + updates local state)
+    pub fn stop_current(&mut self, token: &Option<String>) -> Result<(), String> {
+        if let Some(task_id) = self.stop_current_local() {
+            api::stop_timer(task_id, token)?;
         }
         Ok(())
     }
