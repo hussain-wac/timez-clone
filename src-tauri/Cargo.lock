@@ -3040,16 +3040,13 @@ dependencies = [
 name = "rust-stopwatch"
 version = "0.1.0"
 dependencies = [
- "chrono",
- "dbus",
- "open",
  "serde",
  "serde_json",
  "single-instance",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
- "ureq",
+ "timez-core",
 ]
 
 [[package]]
@@ -4063,6 +4060,28 @@ checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "timez-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dbus",
+ "open",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "timez-service"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "timez-core",
 ]
 
 [[package]]

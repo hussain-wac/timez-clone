@@ -2,6 +2,7 @@ mod api;
 mod commands;
 mod idle;
 mod models;
+mod services;
 mod timer_state;
 
 use tauri::{Emitter, Manager};

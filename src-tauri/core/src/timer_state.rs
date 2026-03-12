@@ -1,0 +1,197 @@
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use chrono::Utc;
+
+use crate::api;
+use crate::api::AuthTokenState;
+use crate::models::Task;
+
+/// Local timer state that tracks everything without hitting the external API.
+/// The external API is only called every SYNC_INTERVAL for persistence.
+pub struct TimerStateInner {
+    /// Cached task list from the last API sync
+    pub cached_tasks: Vec<Task>,
+    /// Currently running task id
+    pub running_task_id: Option<i64>,
+    /// When the current timer was started (local clock)
+    pub timer_started_at: Option<chrono::DateTime<Utc>>,
+    /// Last task id we ran (used for resume)
+    pub last_task_id: Option<i64>,
+    /// Last time we synced with the external API
+    pub last_sync_at: chrono::DateTime<Utc>,
+    /// Elapsed seconds accumulated before current run (from API summary)
+    pub base_elapsed: std::collections::HashMap<i64, i64>,
+}
+
+pub type TimerState = Mutex<TimerStateInner>;
+
+const SYNC_INTERVAL_SECS: u64 = 10 * 60; // 10 minutes
+
+impl TimerStateInner {
+    pub fn new() -> Self {
+        Self {
+            cached_tasks: vec![],
+            running_task_id: None,
+            timer_started_at: None,
+            last_task_id: None,
+            last_sync_at: chrono::DateTime::<Utc>::MIN_UTC,
+            base_elapsed: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Get tasks with locally computed elapsed time
+    pub fn get_tasks(&self) -> Vec<Task> {
+        let now = Utc::now();
+        let mut out = Vec::with_capacity(self.cached_tasks.len());
+        let running_id = self.running_task_id;
+        let live_elapsed = if let (Some(_), Some(started)) = (running_id, self.timer_started_at) {
+            (now - started).num_seconds().max(0)
+        } else {
+            0
+        };
+
+        for t in &self.cached_tasks {
+            let base = self.base_elapsed.get(&t.id).copied().unwrap_or(t.elapsed_secs);
+            let is_running = running_id == Some(t.id);
+            out.push(Task {
+                id: t.id,
+                name: t.name.clone(),
+                budget_secs: t.budget_secs,
+                elapsed_secs: base + if is_running { live_elapsed } else { 0 },
+                running: is_running,
+            });
+        }
+
+        out
+    }
+
+    /// Sync cached data from the external API
+    pub fn sync_from_api(&mut self, token: &Option<String>) {
+        if let Ok(tasks) = api::list_tasks(token) {
+            // Rebuild base elapsed from API to avoid stale entries
+            let mut base_elapsed = std::collections::HashMap::with_capacity(tasks.len());
+            for t in &tasks {
+                base_elapsed.insert(t.id, t.elapsed_secs);
+            }
+
+            // If a task is running according to API, adopt that state
+            if let Some(running) = tasks.iter().find(|t| t.running) {
+                if self.running_task_id.is_none() {
+                    self.running_task_id = Some(running.id);
+                    self.timer_started_at = Some(Utc::now());
+                    self.last_task_id = Some(running.id);
+                }
+                // Subtract the live elapsed that API already includes
+                // so we don't double-count
+                if self.running_task_id == Some(running.id) {
+                    if let Ok(status) = api::get_status(token) {
+                        let api_live = status.elapsed_seconds.unwrap_or(0);
+                        if let Some(base) = base_elapsed.get_mut(&running.id) {
+                            *base = running.elapsed_secs - api_live;
+                        }
+                    }
+                }
+            }
+
+            self.base_elapsed = base_elapsed;
+            self.cached_tasks = tasks
+                .into_iter()
+                .map(|t| Task {
+                    id: t.id,
+                    name: t.name,
+                    budget_secs: t.budget_secs,
+                    elapsed_secs: 0, // We use base_elapsed map instead
+                    running: false,   // We track running state locally
+                })
+                .collect();
+            self.last_sync_at = Utc::now();
+        }
+    }
+
+    /// Start a timer for a task (calls API + updates local state)
+    pub fn start_task(&mut self, task_id: i64, token: &Option<String>) -> Result<(), String> {
+        // Stop current task first if one is running
+        if let Some(current_id) = self.running_task_id {
+            if current_id != task_id {
+                self.stop_current(token)?;
+            } else {
+                return Ok(()); // Already running this task
+            }
+        }
+
+        api::start_timer(task_id, token)?;
+        self.running_task_id = Some(task_id);
+        self.timer_started_at = Some(Utc::now());
+        self.last_task_id = Some(task_id);
+        Ok(())
+    }
+
+    /// Resume a task after idle, adding the idle duration as work time
+    pub fn resume_with_idle_time(&mut self, task_id: i64, idle_secs: i64, token: &Option<String>) -> Result<(), String> {
+        // Add the idle duration to this task's base elapsed
+        let base = self.base_elapsed.entry(task_id).or_insert(0);
+        *base += idle_secs;
+
+        // Start the timer so it keeps running
+        api::start_timer(task_id, token)?;
+        self.running_task_id = Some(task_id);
+        self.timer_started_at = Some(Utc::now());
+        self.last_task_id = Some(task_id);
+        Ok(())
+    }
+
+    /// Stop the currently running timer locally (no API call)
+    pub fn stop_current_local(&mut self) -> Option<i64> {
+        if let Some(task_id) = self.running_task_id {
+            if let Some(started) = self.timer_started_at {
+                let elapsed = (Utc::now() - started).num_seconds().max(0);
+                let base = self.base_elapsed.entry(task_id).or_insert(0);
+                *base += elapsed;
+            }
+            self.running_task_id = None;
+            self.timer_started_at = None;
+            self.last_task_id = Some(task_id);
+            return Some(task_id);
+        }
+        None
+    }
+
+    /// Stop the currently running timer (calls API + updates local state)
+    pub fn stop_current(&mut self, token: &Option<String>) -> Result<(), String> {
+        if let Some(task_id) = self.stop_current_local() {
+            api::stop_timer(task_id, token)?;
+        }
+        Ok(())
+    }
+}
+
+/// Spawns a background thread that syncs with the external API every 10 minutes
+pub fn spawn_sync_thread(timer_state: Arc<Mutex<TimerStateInner>>, auth_state: Arc<Mutex<AuthTokenState>>) {
+    std::thread::spawn(move || {
+        // Initial sync
+        {
+            let token = get_token(&auth_state);
+            if let Ok(mut s) = timer_state.lock() {
+                s.sync_from_api(&token);
+                println!("[sync] Initial sync complete, {} tasks loaded", s.cached_tasks.len());
+            }
+        }
+
+        loop {
+            std::thread::sleep(Duration::from_secs(SYNC_INTERVAL_SECS));
+
+            let token = get_token(&auth_state);
+            if let Ok(mut s) = timer_state.lock() {
+                println!("[sync] Syncing with API...");
+                s.sync_from_api(&token);
+                println!("[sync] Sync complete");
+            }
+        }
+    });
+}
+
+/// Helper to read the current auth token
+fn get_token(auth_state: &Arc<Mutex<AuthTokenState>>) -> Option<String> {
+    auth_state.lock().ok().and_then(|s| s.access_token.clone())
+}
