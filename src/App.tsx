@@ -49,6 +49,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [taskSearch, setTaskSearch] = useState("");
   const [idleEvent, setIdleEvent] = useState<IdleEvent | null>(null);
+  const [idleQueue, setIdleQueue] = useState<IdleEvent[]>([]);
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
   const [quitHasRunning, setQuitHasRunning] = useState(false);
   const [quitError, setQuitError] = useState<string | null>(null);
@@ -95,7 +96,7 @@ function App() {
   // Listen for events from Rust backend
   useEffect(() => {
     const unlisten1 = listen<IdleEvent>("idle-detected", (event) => {
-      setIdleEvent(event.payload);
+      setIdleQueue((prev) => [...prev, event.payload]);
       refreshTasks();
     });
 
@@ -119,6 +120,13 @@ function App() {
       unlisten4.then((fn) => fn());
     };
   }, [refreshTasks]);
+
+  useEffect(() => {
+    if (!idleEvent && idleQueue.length > 0) {
+      setIdleEvent(idleQueue[0]);
+      setIdleQueue((prev) => prev.slice(1));
+    }
+  }, [idleEvent, idleQueue]);
 
   const toggleTimer = async (taskId: number) => {
     const task = tasks.find((t) => t.id === taskId);

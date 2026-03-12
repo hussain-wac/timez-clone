@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -10,14 +11,14 @@ use crate::runtime;
 use crate::ServiceKind;
 
 pub fn run(parent_pid: Option<u32>) -> Result<(), String> {
-    let pending_idle_event = Arc::new(Mutex::new(None));
-    spawn_idle_monitor(Arc::clone(&pending_idle_event));
+    let pending_idle_events = Arc::new(Mutex::new(VecDeque::new()));
+    spawn_idle_monitor(Arc::clone(&pending_idle_events));
 
     runtime::run_server(ServiceKind::IdleTime.socket_path(), parent_pid, move |request| {
         match request {
             Request::TakeIdleEvent => {
-                let mut pending = pending_idle_event.lock().map_err(|err| err.to_string())?;
-                Ok(ResponseData::IdleEvent(pending.take()))
+                let mut pending = pending_idle_events.lock().map_err(|err| err.to_string())?;
+                Ok(ResponseData::IdleEvent(pending.pop_front()))
             }
             Request::Shutdown => Ok(ResponseData::Unit),
             _ => Err("Unsupported request for idle-time service".to_string()),
@@ -25,7 +26,7 @@ pub fn run(parent_pid: Option<u32>) -> Result<(), String> {
     })
 }
 
-fn spawn_idle_monitor(pending_idle_event: Arc<Mutex<Option<IdleEvent>>>) {
+fn spawn_idle_monitor(pending_idle_events: Arc<Mutex<VecDeque<IdleEvent>>>) {
     std::thread::spawn(move || {
         let conn = match Connection::new_session() {
             Ok(conn) => conn,
@@ -65,8 +66,8 @@ fn spawn_idle_monitor(pending_idle_event: Arc<Mutex<Option<IdleEvent>>>) {
                 if is_idle {
                     if let (Some(task), Some(started_at)) = (paused_task.take(), idle_started_at) {
                         let idle_duration_secs = (Utc::now() - started_at).num_seconds().max(0);
-                        if let Ok(mut pending) = pending_idle_event.lock() {
-                            *pending = Some(IdleEvent {
+                        if let Ok(mut pending) = pending_idle_events.lock() {
+                            pending.push_back(IdleEvent {
                                 idle_duration_secs,
                                 task_id: task.id,
                                 task_name: task.name,
