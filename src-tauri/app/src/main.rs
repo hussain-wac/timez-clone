@@ -24,5 +24,5 @@ fn main() {
         return;
     }
 
-    rust_stopwatch_lib::run();
+    timez_pro_lib::run();
 }

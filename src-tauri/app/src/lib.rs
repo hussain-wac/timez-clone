@@ -4,6 +4,7 @@ mod instance;
 use std::time::Duration;
 
 use ipc::ServiceManager;
+use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager, State};
@@ -11,6 +12,7 @@ use timez_core::models::{ActivityStats, AuthResponse, AuthUser, Task, TimerStatu
 use timez_core::protocol::Request;
 
 const POLL_INTERVAL_SECS: u64 = 2;
+const TRAY_ID: &str = "main-tray";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,9 +35,9 @@ pub fn run() {
                 .item(&quit_item)
                 .build()?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Timez Clone")
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                .icon(build_status_icon(false))
+                .tooltip("Timez Pro")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => focus_main_window(app),
@@ -93,6 +95,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            update_app_running_icon(&app.handle(), false);
             spawn_event_bridge(app.handle().clone());
             Ok(())
         })
@@ -153,6 +156,9 @@ fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
             }
 
             if let Ok(status) = service.send(Request::GetStatus).and_then(ipc::decode_status) {
+                if status.running != last_running {
+                    update_app_running_icon(&app_handle, status.running);
+                }
                 if last_running && !status.running {
                     let _ = app_handle.emit("timer-stopped", ());
                 }
@@ -260,4 +266,137 @@ fn quit_app(app_handle: tauri::AppHandle, service: State<'_, ServiceManager>) ->
     service.shutdown();
     app_handle.exit(0);
     Ok(())
+}
+
+fn update_app_running_icon<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>, running: bool) {
+    let icon = build_status_icon(running);
+
+    if let Some(tray) = app_handle.tray_by_id(TRAY_ID) {
+        let _ = tray.set_icon(Some(icon.clone()));
+    }
+
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.set_icon(icon);
+    }
+}
+
+fn build_status_icon(running: bool) -> Image<'static> {
+    let size: usize = 64;
+    let mut rgba = vec![0_u8; size * size * 4];
+    let color = if running {
+        [34_u8, 197_u8, 94_u8, 255_u8]
+    } else {
+        [239_u8, 68_u8, 68_u8, 255_u8]
+    };
+
+    let cx = 32.0_f32;
+    let cy = 32.0_f32;
+    let outer_r = 27.0_f32;
+    let ring_w = 6.5_f32;
+    let inner_r = outer_r - ring_w;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= outer_r && dist >= inner_r {
+                put_pixel(&mut rgba, size, x, y, color);
+            }
+        }
+    }
+
+    draw_rounded_rect(&mut rgba, size, 29, 14, 35, 32, 4.0, color);
+    draw_thick_line(&mut rgba, size, (32.0, 31.0), (45.0, 40.5), 6.0, color);
+    draw_disc(&mut rgba, size, 32.0, 31.0, 3.5, color);
+
+    Image::new_owned(rgba, size as u32, size as u32)
+}
+
+fn draw_rounded_rect(
+    rgba: &mut [u8],
+    size: usize,
+    left: usize,
+    top: usize,
+    right: usize,
+    bottom: usize,
+    radius: f32,
+    color: [u8; 4],
+) {
+    let width = (right.saturating_sub(left)) as f32;
+    let height = (bottom.saturating_sub(top)) as f32;
+    let radius = radius.min(width / 2.0).min(height / 2.0);
+
+    for y in top..bottom {
+        for x in left..right {
+            let xf = x as f32 + 0.5;
+            let yf = y as f32 + 0.5;
+            let min_x = left as f32 + radius;
+            let max_x = (right as f32 - radius).max(min_x);
+            let min_y = top as f32 + radius;
+            let max_y = (bottom as f32 - radius).max(min_y);
+            let clamped_x = xf.clamp(min_x, max_x);
+            let clamped_y = yf.clamp(min_y, max_y);
+            let dx = xf - clamped_x;
+            let dy = yf - clamped_y;
+            if dx * dx + dy * dy <= radius * radius {
+                put_pixel(rgba, size, x, y, color);
+            }
+        }
+    }
+}
+
+fn draw_thick_line(
+    rgba: &mut [u8],
+    size: usize,
+    start: (f32, f32),
+    end: (f32, f32),
+    thickness: f32,
+    color: [u8; 4],
+) {
+    let min_x = start.0.min(end.0).floor().max(0.0) as usize;
+    let max_x = start.0.max(end.0).ceil().min(size as f32 - 1.0) as usize;
+    let min_y = start.1.min(end.1).floor().max(0.0) as usize;
+    let max_y = start.1.max(end.1).ceil().min(size as f32 - 1.0) as usize;
+    let radius = thickness / 2.0;
+    let line_dx = end.0 - start.0;
+    let line_dy = end.1 - start.1;
+    let len_sq = line_dx * line_dx + line_dy * line_dy;
+
+    for y in min_y.saturating_sub(4)..=(max_y + 4).min(size - 1) {
+        for x in min_x.saturating_sub(4)..=(max_x + 4).min(size - 1) {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let t = (((px - start.0) * line_dx + (py - start.1) * line_dy) / len_sq).clamp(0.0, 1.0);
+            let proj_x = start.0 + t * line_dx;
+            let proj_y = start.1 + t * line_dy;
+            let dx = px - proj_x;
+            let dy = py - proj_y;
+            if dx * dx + dy * dy <= radius * radius {
+                put_pixel(rgba, size, x, y, color);
+            }
+        }
+    }
+}
+
+fn draw_disc(rgba: &mut [u8], size: usize, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
+    let min_x = (cx - radius).floor().max(0.0) as usize;
+    let max_x = (cx + radius).ceil().min(size as f32 - 1.0) as usize;
+    let min_y = (cy - radius).floor().max(0.0) as usize;
+    let max_y = (cy + radius).ceil().min(size as f32 - 1.0) as usize;
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            if dx * dx + dy * dy <= radius * radius {
+                put_pixel(rgba, size, x, y, color);
+            }
+        }
+    }
+}
+
+fn put_pixel(rgba: &mut [u8], size: usize, x: usize, y: usize, color: [u8; 4]) {
+    let idx = (y * size + x) * 4;
+    rgba[idx..idx + 4].copy_from_slice(&color);
 }

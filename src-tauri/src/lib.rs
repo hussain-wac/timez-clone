@@ -37,7 +37,7 @@ pub fn run() {
             // Create system tray icon
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Timez Clone")
+                .tooltip("Timez Pro")
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {

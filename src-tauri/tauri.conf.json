@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Timez Clone",
+  "productName": "Timez Pro",
   "version": "0.1.1",
   "identifier": "com.wac.timez-clone",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Timez Clone",
+        "title": "Timez Pro",
         "width": 800,
         "height": 600
       }
@@ -25,7 +25,11 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "resources/timez-service": "timez-service"
+      "resources/timez-auth-service": "timez-auth-service",
+      "resources/timez-task-service": "timez-task-service",
+      "resources/timez-tracker-service": "timez-tracker-service",
+      "resources/timez-idle-time-service": "timez-idle-time-service",
+      "resources/timez-quit-service": "timez-quit-service"
     },
     "icon": [
       "icons/32x32.png",

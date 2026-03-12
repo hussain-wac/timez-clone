@@ -3037,19 +3037,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-stopwatch"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "single-instance",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "timez-core",
-]
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4075,10 +4062,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "timez-pro"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "single-instance",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "timez-core",
+]
+
+[[package]]
 name = "timez-service"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dbus",
  "serde",
  "serde_json",
  "timez-core",
