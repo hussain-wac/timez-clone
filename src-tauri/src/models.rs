@@ -16,11 +16,12 @@ pub struct TimerStatus {
     pub current_entry_elapsed: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdleEvent {
     pub idle_duration_secs: i64,
     pub task_id: i64,
     pub task_name: String,
+    pub tracking_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

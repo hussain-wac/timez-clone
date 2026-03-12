@@ -166,17 +166,6 @@ fn spawn_service_process<R: tauri::Runtime>(
 ) -> Result<Child, String> {
     let parent_pid = std::process::id().to_string();
 
-    if let Ok(service_bin) = resolve_service_binary(app_handle, kind) {
-        return Command::new(&service_bin)
-            .arg("--parent-pid")
-            .arg(&parent_pid)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|err| format!("Failed to start {}: {err}", kind.binary_name()));
-    }
-
     if cfg!(debug_assertions) {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         return Command::new("cargo")
@@ -197,6 +186,17 @@ fn spawn_service_process<R: tauri::Runtime>(
             .current_dir(manifest_dir)
             .spawn()
             .map_err(|err| format!("Failed to start {} through cargo: {err}", kind.binary_name()));
+    }
+
+    if let Ok(service_bin) = resolve_service_binary(app_handle, kind) {
+        return Command::new(&service_bin)
+            .arg("--parent-pid")
+            .arg(&parent_pid)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|err| format!("Failed to start {}: {err}", kind.binary_name()));
     }
 
     Err(format!("Unable to locate {} executable", kind.binary_name()))
@@ -258,7 +258,7 @@ fn route_request(request: &Request) -> ServiceKind {
         | Request::DiscardIdleTime { .. }
         | Request::RefreshTasks => ServiceKind::Task,
         Request::GetActivityStats => ServiceKind::Tracker,
-        Request::TakeIdleEvent => ServiceKind::IdleTime,
+        Request::GetIdleEvent | Request::ResolveIdleEvent => ServiceKind::IdleTime,
         Request::Shutdown => ServiceKind::Quit,
     }
 }

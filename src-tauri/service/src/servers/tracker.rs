@@ -2,10 +2,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use dbus::blocking::Connection;
 use timez_core::models::ActivityStats;
 use timez_core::protocol::{Request, ResponseData};
 
+use crate::idle_detection;
 use crate::runtime;
 use crate::ServiceKind;
 
@@ -47,7 +47,7 @@ fn get_stats(state: &Arc<Mutex<TrackerState>>) -> Result<ActivityStats, String> 
 
 fn spawn_tracker(state: Arc<Mutex<TrackerState>>) {
     std::thread::spawn(move || {
-        let conn = match Connection::new_session() {
+        let conn = match idle_detection::connect_session_bus() {
             Ok(conn) => conn,
             Err(err) => {
                 eprintln!("[tracker] D-Bus connect failed: {err}");
@@ -57,19 +57,10 @@ fn spawn_tracker(state: Arc<Mutex<TrackerState>>) {
 
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            let proxy = conn.with_proxy(
-                "org.gnome.Mutter.IdleMonitor",
-                "/org/gnome/Mutter/IdleMonitor/Core",
-                Duration::from_millis(2000),
-            );
-            let idle_ms: u64 = match proxy.method_call(
-                "org.gnome.Mutter.IdleMonitor",
-                "GetIdletime",
-                (),
-            ) {
-                Ok((ms,)) => ms,
+            let idle_secs = match idle_detection::get_idle_duration_secs(&conn) {
+                Ok(secs) => secs,
                 Err(err) => {
-                    eprintln!("[tracker] GetIdletime failed: {err}");
+                    eprintln!("[tracker] Idle query failed: {err}");
                     continue;
                 }
             };
@@ -80,7 +71,7 @@ fn spawn_tracker(state: Arc<Mutex<TrackerState>>) {
                 Err(_) => continue,
             };
 
-            if idle_ms / 1000 >= 3 {
+            if idle_secs >= 3 {
                 tracker.idle_secs += 2;
             } else {
                 tracker.active_secs += 2;

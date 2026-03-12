@@ -15,6 +15,7 @@ interface IdleEvent {
   idle_duration_secs: number;
   task_id: number;
   task_name: string;
+  tracking_active: boolean;
 }
 
 interface ActivityStats {
@@ -35,7 +36,7 @@ function formatHms(s: number): string {
 
 function formatIdleDuration(secs: number): string {
   const mins = Math.floor(secs / 60);
-  if (mins < 1) return `${secs} seconds`;
+  if (mins < 1) return `${secs} sec`;
   if (mins === 1) return "1 minute";
   const h = Math.floor(mins / 60);
   const remainMins = mins % 60;
@@ -49,7 +50,7 @@ function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
   const [taskSearch, setTaskSearch] = useState("");
   const [idleEvent, setIdleEvent] = useState<IdleEvent | null>(null);
-  const [idleQueue, setIdleQueue] = useState<IdleEvent[]>([]);
+  const [idleTaskId, setIdleTaskId] = useState<number | null>(null);
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
   const [quitHasRunning, setQuitHasRunning] = useState(false);
   const [quitError, setQuitError] = useState<string | null>(null);
@@ -71,6 +72,38 @@ function App() {
 
   useEffect(() => {
     refreshTasks();
+  }, [refreshTasks]);
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const event = await invoke<IdleEvent | null>("get_idle_event");
+        setIdleEvent((prev) => {
+          if (!event) {
+            return null;
+          }
+          if (
+            prev &&
+            prev.task_id === event.task_id &&
+            prev.idle_duration_secs === event.idle_duration_secs &&
+            prev.tracking_active === event.tracking_active
+          ) {
+            return prev;
+          }
+          return event;
+        });
+        if (event) {
+          setIdleTaskId((prev) => prev ?? event.task_id);
+        }
+        if (event?.tracking_active) {
+          refreshTasks();
+        }
+      } catch {
+        // backend may be restarting
+      }
+    }, 1000);
+
+    return () => clearInterval(id);
   }, [refreshTasks]);
 
   // Sync with backend every 5 seconds
@@ -96,7 +129,8 @@ function App() {
   // Listen for events from Rust backend
   useEffect(() => {
     const unlisten1 = listen<IdleEvent>("idle-detected", (event) => {
-      setIdleQueue((prev) => [...prev, event.payload]);
+      setIdleEvent(event.payload);
+      setIdleTaskId((prev) => prev ?? event.payload.task_id);
       refreshTasks();
     });
 
@@ -121,13 +155,6 @@ function App() {
     };
   }, [refreshTasks]);
 
-  useEffect(() => {
-    if (!idleEvent && idleQueue.length > 0) {
-      setIdleEvent(idleQueue[0]);
-      setIdleQueue((prev) => prev.slice(1));
-    }
-  }, [idleEvent, idleQueue]);
-
   const toggleTimer = async (taskId: number) => {
     const task = tasks.find((t) => t.id === taskId);
     if (task?.running) {
@@ -138,25 +165,6 @@ function App() {
       setTasks(result);
     }
     setSelectedTaskId(taskId);
-  };
-
-  const handleAddIdleTime = async () => {
-    if (!idleEvent) return;
-    const result = await invoke<Task[]>("add_idle_time", {
-      taskId: idleEvent.task_id,
-      durationSecs: idleEvent.idle_duration_secs,
-    });
-    setTasks(result);
-    setIdleEvent(null);
-  };
-
-  const handleDiscardIdleTime = async () => {
-    if (!idleEvent) return;
-    const result = await invoke<Task[]>("discard_idle_time", {
-      taskId: idleEvent.task_id,
-    });
-    setTasks(result);
-    setIdleEvent(null);
   };
 
   const handleConfirmQuit = async () => {
@@ -170,6 +178,29 @@ function App() {
       }
     }
     await invoke("quit_app");
+  };
+
+  const handleKeepIdleTime = async () => {
+    if (!idleEvent || idleEvent.tracking_active || !idleTaskId) return;
+    const result = await invoke<Task[]>("add_idle_time", {
+      taskId: idleTaskId,
+      durationSecs: idleEvent.idle_duration_secs,
+    });
+    setTasks(result);
+    await invoke("resolve_idle_event");
+    setIdleEvent(null);
+    setIdleTaskId(null);
+  };
+
+  const handleDiscardIdleTime = async () => {
+    if (!idleEvent || idleEvent.tracking_active) return;
+    const result = await invoke<Task[]>("discard_idle_time", {
+      taskId: idleEvent.task_id,
+    });
+    setTasks(result);
+    await invoke("resolve_idle_event");
+    setIdleEvent(null);
+    setIdleTaskId(null);
   };
 
   const filteredTasks = tasks.filter((t) =>
@@ -494,66 +525,71 @@ function App() {
         </div>
       </div>
 
-      {/* Idle Detection Modal */}
+      {/* Quit Confirmation Modal */}
       {idleEvent && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
-                <svg
-                  className="w-5 h-5 text-yellow-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-gray-800">
-                  Welcome back!
-                </h2>
-                <p className="text-xs text-gray-400">Idle time detected</p>
-              </div>
+        <div className="fixed inset-0 bg-black/30 flex items-start justify-center pt-24 z-50">
+          <div className="w-full max-w-md overflow-hidden rounded-lg border border-gray-200 bg-white shadow-2xl">
+            <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 text-center text-[12px] font-semibold tracking-wide text-gray-700">
+              Idle Time Alert
             </div>
-
-            <div className="bg-gray-50 rounded-lg p-4 mb-4">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-sm text-gray-500">Idle duration</span>
-                <span className="text-lg font-mono font-semibold text-red-600">
+            <div className="p-5 text-[12px] text-gray-700 space-y-4">
+              <div className="leading-5">
+                You have been idle for{" "}
+                <span className="font-semibold text-gray-900">
                   {formatIdleDuration(idleEvent.idle_duration_secs)}
                 </span>
+                .
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-500">Task was running</span>
-                <span className="text-sm font-semibold text-gray-800 truncate ml-2 max-w-[200px]">
-                  {idleEvent.task_name}
-                </span>
+              <div className="space-y-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-3 text-[11px] text-gray-500">
+                <div className="flex items-start justify-between gap-3">
+                  Project:{" "}
+                  <span className="text-right font-medium text-gray-800">
+                    {idleEvent.task_name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Assign time to:</span>
+                  <select
+                    value={idleTaskId ?? ""}
+                    onChange={(e) => setIdleTaskId(Number(e.target.value))}
+                    disabled={idleEvent.tracking_active}
+                    className="min-w-[190px] rounded-sm border border-gray-300 bg-white px-2 py-1.5 text-[11px] text-gray-700 disabled:bg-gray-100"
+                  >
+                    {tasks.map((task) => (
+                      <option key={task.id} value={task.id}>
+                        {task.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
-
-            <p className="text-sm text-gray-500 mb-4">
-              What would you like to do with the idle time?
-            </p>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleAddIdleTime}
-                className="flex-1 bg-purple-600 text-white rounded-md py-2.5 text-sm font-medium hover:bg-purple-700 transition-colors"
-              >
-                Add to task
-              </button>
-              <button
-                onClick={handleDiscardIdleTime}
-                className="flex-1 bg-gray-200 text-gray-800 rounded-md py-2.5 text-sm font-medium hover:bg-gray-300 transition-colors"
-              >
-                Discard
-              </button>
+              {idleEvent.tracking_active && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700">
+                  Idle time is still increasing. Actions unlock when you are
+                  active again.
+                </div>
+              )}
+              {!idleEvent.tracking_active && (
+                <div className="text-[11px] text-gray-500">
+                  Keep this time on the selected task or discard it.
+                </div>
+              )}
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  onClick={handleDiscardIdleTime}
+                  disabled={idleEvent.tracking_active}
+                  className="rounded-sm border border-gray-300 bg-white px-3 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400"
+                >
+                  Discard idle time
+                </button>
+                <button
+                  onClick={handleKeepIdleTime}
+                  disabled={idleEvent.tracking_active || !idleTaskId}
+                  className="rounded-sm border border-blue-600 bg-blue-600 px-3 py-1.5 text-[12px] text-white hover:bg-blue-700 disabled:border-blue-300 disabled:bg-blue-300"
+                >
+                  Keep idle time
+                </button>
+              </div>
             </div>
           </div>
         </div>

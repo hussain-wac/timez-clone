@@ -7,8 +7,8 @@ use ipc::ServiceManager;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, State};
-use timez_core::models::{ActivityStats, AuthResponse, AuthUser, Task, TimerStatus};
+use tauri::{Emitter, Manager, State, UserAttentionType};
+use timez_core::models::{ActivityStats, AuthResponse, AuthUser, IdleEvent, Task, TimerStatus};
 use timez_core::protocol::Request;
 
 const POLL_INTERVAL_SECS: u64 = 2;
@@ -100,7 +100,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+                    unreachable!();
+                };
                 api.prevent_close();
                 let _ = window.hide();
             }
@@ -110,8 +113,10 @@ pub fn run() {
             start_timer,
             stop_timer,
             get_status,
+            get_idle_event,
             add_idle_time,
             discard_idle_time,
+            resolve_idle_event,
             refresh_tasks,
             get_activity_stats,
             google_login,
@@ -126,14 +131,38 @@ pub fn run() {
 
 fn focus_main_window<R: tauri::Runtime, M: Manager<R>>(manager: &M) {
     if let Some(window) = manager.get_webview_window("main") {
+        let _ = window.set_visible_on_all_workspaces(true);
+        let _ = window.set_always_on_top(true);
+        let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.request_user_attention(Some(UserAttentionType::Critical));
+    }
+}
+
+fn maintain_idle_window_state<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_visible_on_all_workspaces(true);
+        let _ = window.set_focus();
+        let _ = window.request_user_attention(Some(UserAttentionType::Critical));
+    }
+}
+
+fn clear_idle_window_state<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_visible_on_all_workspaces(false);
+        let _ = window.request_user_attention(None);
     }
 }
 
 fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
     std::thread::spawn(move || {
         let mut last_running = false;
+        let mut last_idle_event: Option<IdleEvent> = None;
 
         loop {
             std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
@@ -147,12 +176,36 @@ fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
                 let _ = app_handle.emit("activity-update", activity);
             }
 
-            if let Ok(Some(idle_event)) = service
-                .send(Request::TakeIdleEvent)
+            if let Ok(idle_event) = service
+                .send(Request::GetIdleEvent)
                 .and_then(ipc::decode_idle_event)
             {
-                let _ = app_handle.emit("idle-detected", idle_event);
-                let _ = app_handle.emit("timer-stopped", ());
+                if idle_event.is_some() {
+                    maintain_idle_window_state(&app_handle);
+                }
+
+                if idle_event != last_idle_event {
+                    match idle_event.clone() {
+                        Some(event) => {
+                            let should_focus = match &last_idle_event {
+                                None => true,
+                                Some(previous) => {
+                                    previous.task_id != event.task_id
+                                        || (previous.tracking_active && !event.tracking_active)
+                                }
+                            };
+                            if should_focus {
+                                focus_main_window(&app_handle);
+                            }
+                            let _ = app_handle.emit("idle-detected", event);
+                            let _ = app_handle.emit("timer-stopped", ());
+                        }
+                        None => {
+                            clear_idle_window_state(&app_handle);
+                        }
+                    }
+                    last_idle_event = idle_event;
+                }
             }
 
             if let Ok(status) = service.send(Request::GetStatus).and_then(ipc::decode_status) {
@@ -193,6 +246,11 @@ fn get_status(service: State<'_, ServiceManager>) -> Result<TimerStatus, String>
 }
 
 #[tauri::command]
+fn get_idle_event(service: State<'_, ServiceManager>) -> Result<Option<IdleEvent>, String> {
+    ipc::decode_idle_event(request(service, Request::GetIdleEvent)?)
+}
+
+#[tauri::command]
 fn add_idle_time(
     task_id: i64,
     duration_secs: i64,
@@ -210,6 +268,11 @@ fn add_idle_time(
 #[tauri::command]
 fn discard_idle_time(task_id: i64, service: State<'_, ServiceManager>) -> Result<Vec<Task>, String> {
     ipc::decode_tasks(request(service, Request::DiscardIdleTime { task_id })?)
+}
+
+#[tauri::command]
+fn resolve_idle_event(service: State<'_, ServiceManager>) -> Result<(), String> {
+    ipc::decode_unit(request(service, Request::ResolveIdleEvent)?)
 }
 
 #[tauri::command]

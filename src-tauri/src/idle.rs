@@ -145,6 +145,7 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                                 idle_duration_secs: idle_secs,
                                 task_id,
                                 task_name: task_name.clone(),
+                                tracking_active: false,
                             },
                         );
                         eprintln!("[idle] Emit result: {:?}", emit_result);

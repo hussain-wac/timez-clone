@@ -22,7 +22,8 @@ pub enum Request {
     StartGoogleAuth { client_id: String, client_secret: String },
     ValidateToken { token: String },
     Logout,
-    TakeIdleEvent,
+    GetIdleEvent,
+    ResolveIdleEvent,
     Shutdown,
 }
 

@@ -1,24 +1,28 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use dbus::blocking::Connection;
 use timez_core::models::{IdleEvent, Task};
 use timez_core::protocol::{Request, ResponseData};
 
+use crate::idle_detection;
 use crate::runtime;
 use crate::ServiceKind;
 
 pub fn run(parent_pid: Option<u32>) -> Result<(), String> {
-    let pending_idle_events = Arc::new(Mutex::new(VecDeque::new()));
-    spawn_idle_monitor(Arc::clone(&pending_idle_events));
+    let pending_idle_event = Arc::new(Mutex::new(None));
+    spawn_idle_monitor(Arc::clone(&pending_idle_event));
 
     runtime::run_server(ServiceKind::IdleTime.socket_path(), parent_pid, move |request| {
         match request {
-            Request::TakeIdleEvent => {
-                let mut pending = pending_idle_events.lock().map_err(|err| err.to_string())?;
-                Ok(ResponseData::IdleEvent(pending.pop_front()))
+            Request::GetIdleEvent => {
+                let pending = pending_idle_event.lock().map_err(|err| err.to_string())?;
+                Ok(ResponseData::IdleEvent(pending.clone()))
+            }
+            Request::ResolveIdleEvent => {
+                let mut pending = pending_idle_event.lock().map_err(|err| err.to_string())?;
+                *pending = None;
+                Ok(ResponseData::Unit)
             }
             Request::Shutdown => Ok(ResponseData::Unit),
             _ => Err("Unsupported request for idle-time service".to_string()),
@@ -26,9 +30,9 @@ pub fn run(parent_pid: Option<u32>) -> Result<(), String> {
     })
 }
 
-fn spawn_idle_monitor(pending_idle_events: Arc<Mutex<VecDeque<IdleEvent>>>) {
+fn spawn_idle_monitor(pending_idle_event: Arc<Mutex<Option<IdleEvent>>>) {
     std::thread::spawn(move || {
-        let conn = match Connection::new_session() {
+        let conn = match idle_detection::connect_session_bus() {
             Ok(conn) => conn,
             Err(err) => {
                 eprintln!("[idle-time] D-Bus connect failed: {err}");
@@ -42,35 +46,25 @@ fn spawn_idle_monitor(pending_idle_events: Arc<Mutex<VecDeque<IdleEvent>>>) {
 
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            let proxy = conn.with_proxy(
-                "org.gnome.Mutter.IdleMonitor",
-                "/org/gnome/Mutter/IdleMonitor/Core",
-                Duration::from_millis(2000),
-            );
-            let idle_ms: u64 = match proxy.method_call(
-                "org.gnome.Mutter.IdleMonitor",
-                "GetIdletime",
-                (),
-            ) {
-                Ok((ms,)) => ms,
+            let system_idle_secs = match idle_detection::get_idle_duration_secs(&conn) {
+                Ok(secs) => secs,
                 Err(err) => {
-                    eprintln!("[idle-time] GetIdletime failed: {err}");
+                    eprintln!("[idle-time] Idle query failed: {err}");
                     continue;
                 }
             };
-
-            let system_idle_secs = idle_ms / 1000;
             let user_is_active = system_idle_secs < 3;
 
             if user_is_active {
                 if is_idle {
                     if let (Some(task), Some(started_at)) = (paused_task.take(), idle_started_at) {
                         let idle_duration_secs = (Utc::now() - started_at).num_seconds().max(0);
-                        if let Ok(mut pending) = pending_idle_events.lock() {
-                            pending.push_back(IdleEvent {
+                        if let Ok(mut pending) = pending_idle_event.lock() {
+                            *pending = Some(IdleEvent {
                                 idle_duration_secs,
                                 task_id: task.id,
                                 task_name: task.name,
+                                tracking_active: false,
                             });
                         }
                     }
@@ -89,6 +83,29 @@ fn spawn_idle_monitor(pending_idle_events: Arc<Mutex<VecDeque<IdleEvent>>>) {
                     idle_started_at =
                         Some(Utc::now() - chrono::Duration::seconds(system_idle_secs as i64));
                     is_idle = true;
+                    if let (Some(task), Some(started_at)) = (&paused_task, idle_started_at) {
+                        if let Ok(mut pending) = pending_idle_event.lock() {
+                            *pending = Some(IdleEvent {
+                                idle_duration_secs: (Utc::now() - started_at).num_seconds().max(0),
+                                task_id: task.id,
+                                task_name: task.name.clone(),
+                                tracking_active: true,
+                            });
+                        }
+                    }
+                }
+            }
+
+            if is_idle {
+                if let (Some(task), Some(started_at)) = (&paused_task, idle_started_at) {
+                    if let Ok(mut pending) = pending_idle_event.lock() {
+                        *pending = Some(IdleEvent {
+                            idle_duration_secs: (Utc::now() - started_at).num_seconds().max(0),
+                            task_id: task.id,
+                            task_name: task.name.clone(),
+                            tracking_active: true,
+                        });
+                    }
                 }
             }
         }

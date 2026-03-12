@@ -135,6 +135,7 @@ pub fn spawn_idle_monitor(
                             idle_duration_secs: idle_secs,
                             task_id,
                             task_name: task_name.clone(),
+                            tracking_active: false,
                         };
                         if let Ok(mut pending) = pending_idle_event.lock() {
                             *pending = Some(event);

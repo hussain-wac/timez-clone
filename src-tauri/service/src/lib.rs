@@ -1,4 +1,5 @@
 pub mod auth_store;
+pub mod idle_detection;
 pub mod runtime;
 pub mod servers;
 
