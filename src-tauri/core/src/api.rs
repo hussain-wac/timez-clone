@@ -79,9 +79,16 @@ pub fn get_me(token: &str) -> Result<crate::models::AuthUser, String> {
 
 /// Fetches tasks for timer, merges with summary (elapsed) and status (running).
 pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
+    // Return empty list if no token (not logged in)
+    let token = match token {
+        Some(t) => t,
+        None => return Ok(vec![]),
+    };
+
+    let header = auth_header(&Some(token.clone()));
     let mut req = ureq::get(&format!("{}/api/tasks/timer", BASE_URL));
-    if let Some(header) = auth_header(token) {
-        req = req.set("Authorization", &header);
+    if let Some(h) = header {
+        req = req.set("Authorization", &h);
     }
     let resp = req.call().map_err(|e| format!("API error: {}", e))?;
     let api_tasks: Vec<ApiTask> = resp
