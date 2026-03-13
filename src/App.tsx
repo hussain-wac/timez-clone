@@ -3,14 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "./AuthContext";
 
-interface Task {
-  id: number;
-  name: string;
-  budget_secs: number;
-  elapsed_secs: number;
-  running: boolean;
-}
-
 interface IdleEvent {
   idle_duration_secs: number;
   task_id: number;
@@ -18,11 +10,12 @@ interface IdleEvent {
   tracking_active: boolean;
 }
 
-interface ActivityStats {
-  active_secs: number;
-  idle_secs: number;
-  total_secs: number;
-  activity_percent: number;
+interface Task {
+  id: number;
+  name: string;
+  budget_secs: number;
+  elapsed_secs: number;
+  running: boolean;
 }
 
 const EIGHT_HOURS = 8 * 60 * 60;
@@ -56,12 +49,14 @@ function App() {
   const [quitError, setQuitError] = useState<string | null>(null);
   const [crashRecoveryOpen, setCrashRecoveryOpen] = useState(false);
   const [crashRecoveredTaskId, setCrashRecoveredTaskId] = useState<number | null>(null);
-  const [activity, setActivity] = useState<ActivityStats>({
+  const [syncNotification, setSyncNotification] = useState<string | null>(null);
+
+  const activity = {
     active_secs: 0,
     idle_secs: 0,
     total_secs: 0,
     activity_percent: 100,
-  });
+  };
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -140,9 +135,6 @@ function App() {
       refreshTasks();
     });
 
-    const unlisten3 = listen<ActivityStats>("activity-update", (event) => {
-      setActivity(event.payload);
-    });
     const unlisten4 = listen<boolean>("request-quit-confirm", (event) => {
       setQuitError(null);
       setQuitHasRunning(!!event.payload);
@@ -159,13 +151,25 @@ function App() {
       setCrashRecoveryOpen(true);
     });
 
+    const unlistenSync = listen("sync-in-progress", () => {
+      setSyncNotification("Time sync in progress...");
+      setTimeout(() => setSyncNotification(null), 3000);
+    });
+
+    const unlistenMidnight = listen("midnight-reset", () => {
+      refreshTasks();
+      setSyncNotification("Timer reset at midnight");
+      setTimeout(() => setSyncNotification(null), 5000);
+    });
+
     return () => {
       unlisten1.then((fn) => fn());
       unlisten2.then((fn) => fn());
-      unlisten3.then((fn) => fn());
       unlisten4.then((fn) => fn());
       unlisten5.then((fn) => fn());
       unlisten6.then((fn) => fn());
+      unlistenSync.then((fn) => fn());
+      unlistenMidnight.then((fn) => fn());
     };
   }, [refreshTasks]);
 
@@ -234,6 +238,12 @@ function App() {
 
   return (
     <div className="h-screen flex bg-gray-100 text-gray-800 select-none overflow-hidden">
+      {/* Sync notification */}
+      {syncNotification && (
+        <div className="fixed top-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg z-50 animate-fade-in">
+          {syncNotification}
+        </div>
+      )}
       {/* Left sidebar */}
       <div className="w-72 bg-white border-r border-gray-200 flex flex-col">
         {/* User profile */}

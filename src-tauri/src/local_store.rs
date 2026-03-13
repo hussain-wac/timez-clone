@@ -246,6 +246,20 @@ impl LocalTimeStorage {
         }
     }
 
+    pub fn get_entry(&self, task_id: i64) -> Option<LocalTimeEntry> {
+        if let Ok(store) = self.inner.lock() {
+            store
+                .entries
+                .iter()
+                .find(|e| e.task_id == task_id && !e.synced)
+                .cloned()
+        } else {
+            None
+        }
+    }
+}
+    }
+
     pub fn update_last_sync(&self) {
         if let Ok(mut store) = self.inner.lock() {
             store.last_sync_at = Some(chrono::Utc::now().to_rfc3339());

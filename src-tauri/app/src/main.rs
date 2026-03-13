@@ -7,6 +7,9 @@ use std::os::unix::net::UnixStream;
 const INSTANCE_SOCKET_PATH: &str = "/tmp/timez-app.sock";
 
 fn main() {
+    std::env::set_var("GTK_WARNINGS", "0");
+    std::env::set_var("LIBAPPINDICATOR_SILENCE_WARNS", "1");
+
     let instance = match SingleInstance::new("com.wac.timez-clone") {
         Ok(instance) => instance,
         Err(err) => {

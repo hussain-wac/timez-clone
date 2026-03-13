@@ -26,7 +26,7 @@ pub struct TimerStateInner {
 
 pub type TimerState = Mutex<TimerStateInner>;
 
-const SYNC_INTERVAL_SECS: u64 = 10 * 60; // 10 minutes
+const SYNC_INTERVAL_SECS: u64 = 60; // 1 minute
 
 impl TimerStateInner {
     pub fn new() -> Self {
@@ -52,7 +52,11 @@ impl TimerStateInner {
         };
 
         for t in &self.cached_tasks {
-            let base = self.base_elapsed.get(&t.id).copied().unwrap_or(t.elapsed_secs);
+            let base = self
+                .base_elapsed
+                .get(&t.id)
+                .copied()
+                .unwrap_or(t.elapsed_secs);
             let is_running = running_id == Some(t.id);
             out.push(Task {
                 id: t.id,
@@ -75,20 +79,16 @@ impl TimerStateInner {
                 base_elapsed.insert(t.id, t.elapsed_secs);
             }
 
-            // If a task is running according to API, adopt that state
+            // Don't auto-start timer - user must manually start
+            // Only sync running state if we already have a running task
             if let Some(running) = tasks.iter().find(|t| t.running) {
-                if self.running_task_id.is_none() {
-                    self.running_task_id = Some(running.id);
-                    self.timer_started_at = Some(Utc::now());
-                    self.last_task_id = Some(running.id);
-                }
-                // Subtract the live elapsed that API already includes
-                // so we don't double-count
-                if self.running_task_id == Some(running.id) {
-                    if let Ok(status) = api::get_status(token) {
-                        let api_live = status.elapsed_seconds.unwrap_or(0);
-                        if let Some(base) = base_elapsed.get_mut(&running.id) {
-                            *base = running.elapsed_secs - api_live;
+                if let Some(current) = self.running_task_id {
+                    if current == running.id {
+                        if let Ok(status) = api::get_status(token) {
+                            let api_live = status.elapsed_seconds.unwrap_or(0);
+                            if let Some(base) = base_elapsed.get_mut(&running.id) {
+                                *base = running.elapsed_secs - api_live;
+                            }
                         }
                     }
                 }
@@ -102,7 +102,7 @@ impl TimerStateInner {
                     name: t.name,
                     budget_secs: t.budget_secs,
                     elapsed_secs: 0, // We use base_elapsed map instead
-                    running: false,   // We track running state locally
+                    running: false,  // We track running state locally
                 })
                 .collect();
             self.last_sync_at = Utc::now();
@@ -120,7 +120,7 @@ impl TimerStateInner {
             }
         }
 
-        api::start_timer(task_id, token)?;
+        // Track locally - sync happens periodically or on stop
         self.running_task_id = Some(task_id);
         self.timer_started_at = Some(Utc::now());
         self.last_task_id = Some(task_id);
@@ -128,13 +128,17 @@ impl TimerStateInner {
     }
 
     /// Resume a task after idle, adding the idle duration as work time
-    pub fn resume_with_idle_time(&mut self, task_id: i64, idle_secs: i64, token: &Option<String>) -> Result<(), String> {
+    pub fn resume_with_idle_time(
+        &mut self,
+        task_id: i64,
+        idle_secs: i64,
+        _token: &Option<String>,
+    ) -> Result<(), String> {
         // Add the idle duration to this task's base elapsed
         let base = self.base_elapsed.entry(task_id).or_insert(0);
         *base += idle_secs;
 
-        // Start the timer so it keeps running
-        api::start_timer(task_id, token)?;
+        // Resume tracking locally
         self.running_task_id = Some(task_id);
         self.timer_started_at = Some(Utc::now());
         self.last_task_id = Some(task_id);
@@ -157,24 +161,45 @@ impl TimerStateInner {
         None
     }
 
-    /// Stop the currently running timer (calls API + updates local state)
+    /// Stop the currently running timer and sync to backend
     pub fn stop_current(&mut self, token: &Option<String>) -> Result<(), String> {
         if let Some(task_id) = self.stop_current_local() {
-            api::stop_timer(task_id, token)?;
+            // Calculate elapsed and sync to backend
+            if let Some(started_at) = self.timer_started_at {
+                let elapsed = (chrono::Utc::now() - started_at).num_seconds().max(0);
+                let client_started = started_at.to_rfc3339();
+                let client_stopped = chrono::Utc::now().to_rfc3339();
+
+                if elapsed > 0 {
+                    let _ = api::sync_time(
+                        task_id,
+                        elapsed,
+                        &client_started,
+                        Some(&client_stopped),
+                        token,
+                    );
+                }
+            }
         }
         Ok(())
     }
 }
 
 /// Spawns a background thread that syncs with the external API every 10 minutes
-pub fn spawn_sync_thread(timer_state: Arc<Mutex<TimerStateInner>>, auth_state: Arc<Mutex<AuthTokenState>>) {
+pub fn spawn_sync_thread(
+    timer_state: Arc<Mutex<TimerStateInner>>,
+    auth_state: Arc<Mutex<AuthTokenState>>,
+) {
     std::thread::spawn(move || {
         // Initial sync
         {
             let token = get_token(&auth_state);
             if let Ok(mut s) = timer_state.lock() {
                 s.sync_from_api(&token);
-                println!("[sync] Initial sync complete, {} tasks loaded", s.cached_tasks.len());
+                println!(
+                    "[sync] Initial sync complete, {} tasks loaded",
+                    s.cached_tasks.len()
+                );
             }
         }
 

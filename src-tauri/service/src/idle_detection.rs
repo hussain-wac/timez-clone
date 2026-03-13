@@ -14,6 +14,23 @@ pub fn get_idle_duration_secs(conn: &Connection) -> Result<u64, String> {
         .map(|idle_ms| idle_ms / 1000)
 }
 
+pub fn is_session_locked(conn: &Connection) -> bool {
+    check_screen_active(conn)
+}
+
+fn check_screen_active(conn: &Connection) -> bool {
+    let proxy = conn.with_proxy(
+        "org.freedesktop.ScreenSaver",
+        "/org/freedesktop/ScreenSaver",
+        Duration::from_millis(500),
+    );
+
+    proxy
+        .method_call("org.freedesktop.ScreenSaver", "GetActive", ())
+        .map(|r: (bool,)| r.0)
+        .unwrap_or(false)
+}
+
 fn query_mutter_idle_ms(conn: &Connection) -> Result<u64, String> {
     let proxy = conn.with_proxy(
         "org.gnome.Mutter.IdleMonitor",
@@ -33,11 +50,7 @@ fn query_freedesktop_idle_ms(conn: &Connection) -> Result<u64, String> {
         Duration::from_millis(2000),
     );
     let (idle_ms,): (u32,) = proxy
-        .method_call(
-            "org.freedesktop.ScreenSaver",
-            "GetSessionIdleTime",
-            (),
-        )
+        .method_call("org.freedesktop.ScreenSaver", "GetSessionIdleTime", ())
         .map_err(|err| err.to_string())?;
     Ok(idle_ms as u64)
 }

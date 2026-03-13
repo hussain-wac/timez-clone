@@ -77,9 +77,9 @@ pub fn get_me(token: &str) -> Result<crate::models::AuthUser, String> {
     resp.into_json().map_err(|e| format!("Parse error: {}", e))
 }
 
-/// Fetches tasks, merges with summary (elapsed) and status (running).
+/// Fetches tasks for timer (only in_progress status), merges with summary (elapsed) and status (running).
 pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
-    let mut req = ureq::get(&format!("{}/api/tasks", BASE_URL));
+    let mut req = ureq::get(&format!("{}/api/tasks/timer", BASE_URL));
     if let Some(header) = auth_header(token) {
         req = req.set("Authorization", &header);
     }

@@ -44,6 +44,49 @@ impl ActivityTracker {
 
 pub type ActivityState = StdMutex<ActivityTracker>;
 
+fn is_session_locked(conn: &Connection) -> bool {
+    check_screen_active(conn)
+}
+
+fn check_screen_active(conn: &Connection) -> bool {
+    let proxy = conn.with_proxy(
+        "org.freedesktop.ScreenSaver",
+        "/org/freedesktop/ScreenSaver",
+        Duration::from_millis(500),
+    );
+
+    proxy
+        .method_call("org.freedesktop.ScreenSaver", "GetActive", ())
+        .map(|r: (bool,)| r.0)
+        .unwrap_or(false)
+}
+
+fn check_screen_locked(conn: &Connection) -> bool {
+    let proxy = conn.with_proxy(
+        "org.freedesktop.ScreenSaver",
+        "/org/freedesktop/ScreenSaver",
+        Duration::from_millis(500),
+    );
+
+    proxy
+        .method_call::<_, (bool,)>("org.freedesktop.ScreenSaver", "GetActive", ())
+        .map(|(active,)| active)
+        .unwrap_or(false)
+}
+
+fn check_logind(conn: &Connection) -> bool {
+    let proxy = conn.with_proxy(
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        Duration::from_millis(500),
+    );
+
+    proxy
+        .method_call::<_, (String,)>("org.freedesktop.login1.Manager", "GetSession", ())
+        .map(|(session,)| session.contains("self"))
+        .unwrap_or(false)
+}
+
 /// Helper to read the current auth token
 fn get_token(app_handle: &tauri::AppHandle) -> Option<String> {
     let auth = app_handle.state::<AuthToken>();
@@ -77,11 +120,15 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
         let mut paused_task_id: Option<i64> = None;
         let mut paused_task_name: Option<String> = None;
         let mut log_counter: u64 = 0;
+        let mut was_locked = false;
 
         loop {
             std::thread::sleep(Duration::from_secs(POLL_INTERVAL_SECS));
 
+            let is_locked = is_session_locked(&conn);
+
             // Get system-wide idle time via D-Bus (Mutter IdleMonitor)
+            // If D-Bus fails (system might be sleeping), treat as idle
             let proxy = conn.with_proxy(
                 "org.gnome.Mutter.IdleMonitor",
                 "/org/gnome/Mutter/IdleMonitor/Core",
@@ -91,13 +138,22 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                 match proxy.method_call("org.gnome.Mutter.IdleMonitor", "GetIdletime", ()) {
                     Ok((ms,)) => ms,
                     Err(e) => {
-                        eprintln!("[idle] D-Bus GetIdletime failed: {}", e);
-                        continue;
+                        eprintln!("[idle] D-Bus failed (system may be sleeping): {}", e);
+                        // Treat D-Bus failure as idle (system might be sleeping/suspended)
+                        (idle_threshold_secs * 1000) + 1
                     }
                 };
 
             let system_idle_secs = idle_ms / 1000;
-            let user_is_active = system_idle_secs < POLL_INTERVAL_SECS + 1;
+            let user_is_active = system_idle_secs < POLL_INTERVAL_SECS + 1 && !is_locked;
+
+            if is_locked && !was_locked {
+                was_locked = true;
+                eprintln!("[idle] Session locked - treating as idle");
+            } else if !is_locked && was_locked {
+                was_locked = false;
+                eprintln!("[idle] Session unlocked");
+            }
 
             // Log every 10 iterations (~20 seconds) to reduce noise
             log_counter += 1;
@@ -164,13 +220,13 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                 }
             } else {
                 // User is idle
-                if !is_idle && system_idle_secs >= idle_threshold_secs {
+                if !is_idle && (system_idle_secs >= idle_threshold_secs || is_locked) {
                     // ============================================
                     // IDLE DETECTED — stop running timer
                     // ============================================
                     eprintln!(
-                        "[idle] *** IDLE THRESHOLD REACHED ({}s idle) ***",
-                        system_idle_secs
+                        "[idle] *** IDLE THRESHOLD REACHED ({}s idle, locked={}) ***",
+                        system_idle_secs, is_locked
                     );
 
                     idle_started_at =

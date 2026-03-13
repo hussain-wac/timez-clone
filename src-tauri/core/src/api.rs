@@ -77,9 +77,9 @@ pub fn get_me(token: &str) -> Result<crate::models::AuthUser, String> {
     resp.into_json().map_err(|e| format!("Parse error: {}", e))
 }
 
-/// Fetches tasks, merges with summary (elapsed) and status (running).
+/// Fetches tasks for timer, merges with summary (elapsed) and status (running).
 pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
-    let mut req = ureq::get(&format!("{}/api/tasks", BASE_URL));
+    let mut req = ureq::get(&format!("{}/api/tasks/timer", BASE_URL));
     if let Some(header) = auth_header(token) {
         req = req.set("Authorization", &header);
     }
@@ -144,6 +144,29 @@ pub fn stop_timer(task_id: i64, token: &Option<String>) -> Result<(), String> {
         req = req.set("Authorization", &header);
     }
     req.call().map_err(|e| format!("API error: {}", e))?;
+    Ok(())
+}
+
+pub fn sync_time(
+    task_id: i64,
+    elapsed_seconds: i64,
+    client_started_at: &str,
+    client_stopped_at: Option<&str>,
+    token: &Option<String>,
+) -> Result<(), String> {
+    let mut req = ureq::post(&format!("{}/api/tasks/sync-time", BASE_URL));
+    if let Some(header) = auth_header(token) {
+        req = req.set("Authorization", &header);
+    }
+    req = req.set("Content-Type", "application/json");
+    let body = serde_json::json!({
+        "task_id": task_id,
+        "elapsed_seconds": elapsed_seconds,
+        "client_started_at": client_started_at,
+        "client_stopped_at": client_stopped_at
+    });
+    req.send_json(body)
+        .map_err(|e| format!("API error: {}", e))?;
     Ok(())
 }
 
