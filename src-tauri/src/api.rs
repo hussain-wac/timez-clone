@@ -85,7 +85,8 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
         None => return Ok(vec![]),
     };
 
-    let header = auth_header(&Some(token.clone()));
+    let token_ref: &Option<String> = &Some(token.clone());
+    let header = auth_header(token_ref);
     let mut req = ureq::get(&format!("{}/api/tasks/timer", BASE_URL));
     if let Some(h) = header {
         req = req.set("Authorization", &h);
@@ -96,7 +97,7 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
         .map_err(|e| format!("Parse error: {}", e))?;
 
     // Get elapsed times from summary report
-    let summary = get_summary(token).unwrap_or(SummaryReport {
+    let summary = get_summary(token_ref).unwrap_or(SummaryReport {
         tasks: vec![],
         total_seconds: 0,
     });
@@ -106,7 +107,7 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
     }
 
     // Get running status
-    let status = get_status(token).ok();
+    let status = get_status(token_ref).ok();
     let (running_task_id, running_elapsed) = match status.as_ref().filter(|s| s.running) {
         Some(s) => (
             s.task.as_ref().map(|t| t.id),
