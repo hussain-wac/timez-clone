@@ -148,17 +148,23 @@ pub fn run() {
 
 fn focus_main_window<R: tauri::Runtime, M: Manager<R>>(manager: &M) {
     if let Some(window) = manager.get_webview_window("main") {
+        let _ = window.set_visible_on_all_workspaces(true);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_always_on_top(false);
     }
 }
 
 fn maintain_idle_window_state<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
     if let Some(window) = app_handle.get_webview_window("main") {
-        let _ = window.show();
+        let _ = window.set_visible_on_all_workspaces(true);
         let _ = window.unminimize();
+        let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_always_on_top(false);
     }
 }
 

@@ -291,23 +291,27 @@ fn wait_for_auth_code(listener: &TcpListener) -> Result<String, String> {
     let code = extract_query_param(path, "code")
         .ok_or_else(|| "No authorization code in callback".to_string())?;
 
-    // Send a success page to the browser with auto-launch
+    // Send a success page with animated checkmark and auto-redirect
     let html = r#"<html><head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 60px; background: #f5f5f5; }
-            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto; }
-            h2 { color: #7c3aed; margin-bottom: 16px; }
-            p { color: #666; margin-bottom: 24px; }
-            .btn { background: #7c3aed; color: white; padding: 14px 28px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
-            .btn:hover { background: #6d28d9; }
+            body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f0fdf4; }
+            .checkmark { width: 100px; height: 100px; }
+            .checkmark circle { stroke: #22c55e; stroke-width: 3; fill: none; animation: circle 0.6s ease-in-out forwards; stroke-dasharray: 166; stroke-dashoffset: 166; }
+            .checkmark path { stroke: #22c55e; stroke-width: 4; fill: none; stroke-linecap: round; animation: check 0.3s 0.4s ease-in-out forwards; stroke-dasharray: 48; stroke-dashoffset: 48; }
+            @keyframes circle { to { stroke-dashoffset: 0; } }
+            @keyframes check { to { stroke-dashoffset: 0; } }
+            .text { text-align: center; margin-top: 20px; font-size: 14px; color: #15803d; font-family: system-ui; }
         </style>
     </head><body>
-        <div class="card">
-            <h2>Authentication Successful!</h2>
-            <p>Click below to open Timez Pro</p>
-            <button class="btn" onclick="window.location.href='timezpro://'">Open Timez Pro</button>
+        <div>
+            <svg class="checkmark" viewBox="0 0 52 52">
+                <circle cx="26" cy="26" r="25"/>
+                <path d="M14 27 L23 36 L38 18"/>
+            </svg>
+            <div class="text">auth success</div>
         </div>
+        <script>setTimeout(() => window.location.href = 'timezpro://', 800);</script>
     </body></html>"#;
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
