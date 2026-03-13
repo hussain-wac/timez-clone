@@ -136,7 +136,9 @@ impl ServiceManager {
             serde_json::from_str(&line).map_err(|err| format!("Invalid response: {err}"))?;
 
         if !response.ok {
-            return Err(response.error.unwrap_or_else(|| "Unknown service error".to_string()));
+            return Err(response
+                .error
+                .unwrap_or_else(|| "Unknown service error".to_string()));
         }
 
         response
@@ -185,7 +187,12 @@ fn spawn_service_process<R: tauri::Runtime>(
             .stderr(Stdio::inherit())
             .current_dir(manifest_dir)
             .spawn()
-            .map_err(|err| format!("Failed to start {} through cargo: {err}", kind.binary_name()));
+            .map_err(|err| {
+                format!(
+                    "Failed to start {} through cargo: {err}",
+                    kind.binary_name()
+                )
+            });
     }
 
     if let Ok(service_bin) = resolve_service_binary(app_handle, kind) {
@@ -199,7 +206,10 @@ fn spawn_service_process<R: tauri::Runtime>(
             .map_err(|err| format!("Failed to start {}: {err}", kind.binary_name()));
     }
 
-    Err(format!("Unable to locate {} executable", kind.binary_name()))
+    Err(format!(
+        "Unable to locate {} executable",
+        kind.binary_name()
+    ))
 }
 
 fn resolve_service_binary<R: tauri::Runtime>(
@@ -223,7 +233,10 @@ fn resolve_service_binary<R: tauri::Runtime>(
         return Ok(bundled);
     }
 
-    Err(format!("Unable to locate {} executable", kind.binary_name()))
+    Err(format!(
+        "Unable to locate {} executable",
+        kind.binary_name()
+    ))
 }
 
 fn try_connect(kind: ServiceKind) -> Result<UnixStream, String> {
@@ -308,6 +321,40 @@ pub fn decode_idle_event(data: ResponseData) -> Result<Option<IdleEvent>, String
 pub fn decode_unit(data: ResponseData) -> Result<(), String> {
     match data {
         ResponseData::Unit => Ok(()),
+        _ => Err("Unexpected service response".to_string()),
+    }
+}
+
+pub fn send_auth_login(google_id_token: &str) -> Result<AuthResponse, String> {
+    let socket_path = PathBuf::from("/tmp/timez-auth-service.sock");
+    let mut stream = UnixStream::connect(&socket_path).map_err(|err| err.to_string())?;
+    let envelope = RequestEnvelope {
+        token: REQUEST_TOKEN.to_string(),
+        request: Request::GoogleLogin {
+            google_id_token: google_id_token.to_string(),
+        },
+    };
+    let payload = serde_json::to_string(&envelope).map_err(|err| err.to_string())?;
+    stream
+        .write_all(payload.as_bytes())
+        .map_err(|err| err.to_string())?;
+    stream.write_all(b"\n").map_err(|err| err.to_string())?;
+    stream.flush().map_err(|err| err.to_string())?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).map_err(|err| err.to_string())?;
+    let response: ResponseEnvelope =
+        serde_json::from_str(&line).map_err(|err| format!("Invalid response: {err}"))?;
+
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "Unknown service error".to_string()));
+    }
+
+    match response.data {
+        Some(ResponseData::AuthResponse(auth_response)) => Ok(auth_response),
         _ => Err("Unexpected service response".to_string()),
     }
 }

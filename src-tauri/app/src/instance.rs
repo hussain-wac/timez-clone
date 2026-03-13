@@ -7,7 +7,9 @@ use tauri::Manager;
 
 const INSTANCE_SOCKET_PATH: &str = "/tmp/timez-app.sock";
 
-pub fn spawn_show_listener<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) -> Result<(), String> {
+pub fn spawn_show_listener<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+) -> Result<(), String> {
     remove_stale_socket();
 
     let listener = UnixListener::bind(INSTANCE_SOCKET_PATH)

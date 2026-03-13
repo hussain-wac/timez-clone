@@ -8,6 +8,11 @@ interface AuthUser {
   picture: string | null;
 }
 
+interface AuthResponse {
+  access_token: string;
+  user: AuthUser;
+}
+
 interface AuthContextType {
   isAuthenticated: boolean;
   user: AuthUser | null;
@@ -52,13 +57,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loginViaBrowser = useCallback(async () => {
-    const response = await invoke<{ access_token: string; user: AuthUser }>(
+    // Start OAuth in background - don't wait for response
+    await invoke<string>(
       "start_google_auth",
       { clientId: GOOGLE_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET },
     );
-    setUser(response.user);
-    setAccessToken(response.access_token);
-    localStorage.setItem("access_token", response.access_token);
+    // The actual login will be handled via events below
+  }, []);
+
+  // Listen for auth events
+  useEffect(() => {
+    let unlistenSuccess: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<AuthResponse>("auth-success", (event) => {
+        const response = event.payload;
+        setUser(response.user);
+        setAccessToken(response.access_token);
+        localStorage.setItem("access_token", response.access_token);
+      }).then(fn => unlistenSuccess = fn);
+
+      listen<string>("auth-error", (event) => {
+        console.error("Auth error:", event.payload);
+      }).then(fn => unlistenError = fn);
+    });
+
+    return () => {
+      unlistenSuccess?.();
+      unlistenError?.();
+    };
   }, []);
 
   const logout = useCallback(() => {

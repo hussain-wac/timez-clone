@@ -54,6 +54,8 @@ function App() {
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false);
   const [quitHasRunning, setQuitHasRunning] = useState(false);
   const [quitError, setQuitError] = useState<string | null>(null);
+  const [crashRecoveryOpen, setCrashRecoveryOpen] = useState(false);
+  const [crashRecoveredTaskId, setCrashRecoveredTaskId] = useState<number | null>(null);
   const [activity, setActivity] = useState<ActivityStats>({
     active_secs: 0,
     idle_secs: 0,
@@ -147,11 +149,23 @@ function App() {
       setQuitConfirmOpen(true);
     });
 
+    const unlisten5 = listen<{ task_id: number; action?: string }>("crash-recovery-complete", (event) => {
+      setCrashRecoveredTaskId(event.payload.task_id);
+      setCrashRecoveryOpen(true);
+    });
+
+    const unlisten6 = listen<{ task_id: number; reason: string }>("time-discarded", (event) => {
+      setCrashRecoveredTaskId(event.payload.task_id);
+      setCrashRecoveryOpen(true);
+    });
+
     return () => {
       unlisten1.then((fn) => fn());
       unlisten2.then((fn) => fn());
       unlisten3.then((fn) => fn());
       unlisten4.then((fn) => fn());
+      unlisten5.then((fn) => fn());
+      unlisten6.then((fn) => fn());
     };
   }, [refreshTasks]);
 
@@ -647,6 +661,63 @@ function App() {
                 {quitHasRunning ? "Stop and Quit" : "Quit"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Crash Recovery / Time Discarded Modal */}
+      {crashRecoveryOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                <svg
+                  className="w-5 h-5 text-amber-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800">
+                  Time Verification
+                </h2>
+                <p className="text-xs text-gray-400">
+                  Timestamp mismatch detected. Unwanted time has been discarded.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-md px-4 py-3 mb-4">
+              <p className="text-sm text-amber-800">
+                The recorded time has been verified against the server. 
+                Any discrepancy between local and server timestamps has been corrected 
+                to ensure accurate time tracking.
+                {crashRecoveredTaskId && (
+                  <span className="block mt-2 font-medium">
+                    Task ID: {crashRecoveredTaskId}
+                  </span>
+                )}
+              </p>
+            </div>
+
+            <button
+              onClick={() => {
+                setCrashRecoveryOpen(false);
+                setCrashRecoveredTaskId(null);
+                refreshTasks();
+              }}
+              className="w-full bg-amber-600 text-white rounded-md py-2.5 text-sm font-medium hover:bg-amber-700 transition-colors"
+            >
+              Got it
+            </button>
           </div>
         </div>
       )}

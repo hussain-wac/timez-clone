@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::api;
 use crate::api::AuthToken;
+use crate::local_store::LocalTimeStorage;
 use crate::models::Task;
 
 /// Local timer state that tracks everything without hitting the external API.
@@ -17,6 +18,8 @@ pub struct TimerStateInner {
     pub running_task_id: Option<i64>,
     /// When the current timer was started (local clock)
     pub timer_started_at: Option<chrono::DateTime<Utc>>,
+    /// When the current timer was started (ISO8601 string for API)
+    pub client_started_at: Option<String>,
     /// Last task id we ran (used for resume)
     pub last_task_id: Option<i64>,
     /// Last time we synced with the external API
@@ -35,6 +38,7 @@ impl TimerStateInner {
             cached_tasks: vec![],
             running_task_id: None,
             timer_started_at: None,
+            client_started_at: None,
             last_task_id: None,
             last_sync_at: chrono::DateTime::<Utc>::MIN_UTC,
             base_elapsed: std::collections::HashMap::new(),
@@ -53,7 +57,11 @@ impl TimerStateInner {
         };
 
         for t in &self.cached_tasks {
-            let base = self.base_elapsed.get(&t.id).copied().unwrap_or(t.elapsed_secs);
+            let base = self
+                .base_elapsed
+                .get(&t.id)
+                .copied()
+                .unwrap_or(t.elapsed_secs);
             let is_running = running_id == Some(t.id);
             out.push(Task {
                 id: t.id,
@@ -103,7 +111,7 @@ impl TimerStateInner {
                     name: t.name,
                     budget_secs: t.budget_secs,
                     elapsed_secs: 0, // We use base_elapsed map instead
-                    running: false,   // We track running state locally
+                    running: false,  // We track running state locally
                 })
                 .collect();
             self.last_sync_at = Utc::now();
@@ -111,58 +119,88 @@ impl TimerStateInner {
     }
 
     /// Start a timer for a task (calls API + updates local state)
-    pub fn start_task(&mut self, task_id: i64, token: &Option<String>) -> Result<(), String> {
+    pub fn start_task(
+        &mut self,
+        task_id: i64,
+        token: &Option<String>,
+        local_store: &LocalTimeStorage,
+    ) -> Result<(), String> {
         // Stop current task first if one is running
         if let Some(current_id) = self.running_task_id {
             if current_id != task_id {
-                self.stop_current(token)?;
+                self.stop_current(token, local_store)?;
             } else {
                 return Ok(()); // Already running this task
             }
         }
 
-        api::start_timer(task_id, token)?;
+        let now = Utc::now();
+        let client_started = now.to_rfc3339();
+
+        api::start_timer(task_id, &client_started, token)?;
+
+        local_store.set_running(task_id, client_started.clone());
+
         self.running_task_id = Some(task_id);
-        self.timer_started_at = Some(Utc::now());
+        self.timer_started_at = Some(now);
+        self.client_started_at = Some(client_started);
         self.last_task_id = Some(task_id);
         Ok(())
     }
 
     /// Resume a task after idle, adding the idle duration as work time
-    pub fn resume_with_idle_time(&mut self, task_id: i64, idle_secs: i64, token: &Option<String>) -> Result<(), String> {
+    pub fn resume_with_idle_time(
+        &mut self,
+        task_id: i64,
+        idle_secs: i64,
+        token: &Option<String>,
+        local_store: &LocalTimeStorage,
+    ) -> Result<(), String> {
         // Add the idle duration to this task's base elapsed
         let base = self.base_elapsed.entry(task_id).or_insert(0);
         *base += idle_secs;
 
         // Start the timer so it keeps running
-        api::start_timer(task_id, token)?;
+        let now = Utc::now();
+        let client_started = now.to_rfc3339();
+
+        api::start_timer(task_id, &client_started, token)?;
+
+        local_store.start_timer(task_id, client_started.clone());
+
         self.running_task_id = Some(task_id);
-        self.timer_started_at = Some(Utc::now());
+        self.timer_started_at = Some(now);
+        self.client_started_at = Some(client_started);
         self.last_task_id = Some(task_id);
         Ok(())
     }
 
     /// Stop the currently running timer locally (no API call)
-    pub fn stop_current_local(&mut self) -> Option<i64> {
+    pub fn stop_current_local(&mut self) -> Option<(i64, String)> {
         if let Some(task_id) = self.running_task_id {
             if let Some(started) = self.timer_started_at {
                 let elapsed = (Utc::now() - started).num_seconds().max(0);
                 let base = self.base_elapsed.entry(task_id).or_insert(0);
                 *base += elapsed;
             }
+            let client_stopped = Utc::now().to_rfc3339();
             self.running_task_id = None;
             self.timer_started_at = None;
             self.last_task_id = Some(task_id);
-            return Some(task_id);
+            return Some((task_id, client_stopped));
         }
         None
     }
 
     /// Stop the currently running timer (calls API + updates local state)
-    pub fn stop_current(&mut self, token: &Option<String>) -> Result<(), String> {
-        if let Some(task_id) = self.stop_current_local() {
-            api::stop_timer(task_id, token)?;
+    pub fn stop_current(&mut self, token: &Option<String>, local_store: &LocalTimeStorage) -> Result<(), String> {
+        if let Some((task_id, client_stopped)) = self.stop_current_local() {
+            api::stop_timer(task_id, &client_stopped, token)?;
+            local_store.set_stopped(task_id);
         }
+        Ok(())
+    }
+}
         Ok(())
     }
 }
@@ -176,7 +214,10 @@ pub fn spawn_sync_thread(app_handle: AppHandle) {
             let state = app_handle.state::<TimerState>();
             if let Ok(mut s) = state.inner().lock() {
                 s.sync_from_api(&token);
-                println!("[sync] Initial sync complete, {} tasks loaded", s.cached_tasks.len());
+                println!(
+                    "[sync] Initial sync complete, {} tasks loaded",
+                    s.cached_tasks.len()
+                );
             }
         }
 
@@ -185,10 +226,122 @@ pub fn spawn_sync_thread(app_handle: AppHandle) {
 
             let token = get_token(&app_handle);
             let state = app_handle.state::<TimerState>();
+            let local_store = app_handle.state::<LocalTimeStorage>();
+
             if let Ok(mut s) = state.inner().lock() {
                 println!("[sync] Syncing with API...");
+                
+                // Do incremental sync for running task
+                if let (Some(task_id), Some(started_at)) = (s.running_task_id, s.timer_started_at) {
+                    let elapsed = (Utc::now() - started_at).num_seconds().max(0);
+                    let client_started = s.client_started_at.as_deref().unwrap_or(&Utc::now().to_rfc3339());
+                    
+                    if elapsed > 0 {
+                        if let Err(e) = api::sync_time(task_id, elapsed, client_started, None, &token) {
+                            println!("[sync] Error syncing time: {}", e);
+                        } else {
+                            println!("[sync] Synced {} seconds for task {}", elapsed, task_id);
+                            local_store.update_last_sync();
+                            
+                            // Emit event for notification
+                            let _ = app_handle.emit("sync-complete", serde_json::json!({
+                                "task_id": task_id,
+                                "elapsed": elapsed
+                            }));
+                        }
+                    }
+                }
+                
                 s.sync_from_api(&token);
                 println!("[sync] Sync complete");
+            }
+        }
+    });
+}
+
+/// Crash recovery: check if there was a running timer that wasn't stopped properly
+pub fn crash_recovery_on_startup(app_handle: &AppHandle) {
+    let local_store = app_handle.state::<LocalTimeStorage>();
+    
+    // First try to get token from memory, then from local storage
+    let token = get_token(app_handle).or_else(|| local_store.get_auth_token());
+    
+    println!("[crash-recovery] Starting timestamp verification on startup...");
+    
+    // Get all unsynced entries
+    let entries = local_store.get_unsynced_entries();
+    println!("[crash-recovery] Found {} unsynced entries", entries.len());
+    
+    // Only do crash recovery if timer was actually running when app crashed
+    if local_store.was_running() {
+        if let Some(task_id) = local_store.get_last_running_task_id() {
+            if let Some(entry) = entries.iter().find(|e| e.task_id == task_id) {
+                println!("[crash-recovery] Found running task {} (started at: {})", task_id, entry.client_started_at);
+                
+                // Use last timestamp from array for accurate crash recovery
+                let recovery_timestamp = entry.timestamps.last()
+                    .map(|t| t.timestamp.clone())
+                    .unwrap_or_else(|| entry.client_started_at.clone());
+                
+                if let Some(ref tok) = token {
+                    match api::crash_recovery(task_id, &recovery_timestamp, &Some(tok.clone())) {
+                        Ok(_) => {
+                            println!("[crash-recovery] Successfully recovered, stale time discarded");
+                            local_store.mark_synced(task_id);
+                            
+                            let _ = app_handle.emit("crash-recovery-complete", serde_json::json!({
+                                "task_id": task_id,
+                                "action": "crash_recovery"
+                            }));
+                        }
+                        Err(e) => {
+                            println!("[crash-recovery] API Error: {}", e);
+                        }
+                    }
+                } else {
+                    local_store.clear_running_state();
+                    let _ = app_handle.emit("crash-recovery-complete", serde_json::json!({
+                        "task_id": task_id,
+                        "pending": true
+                    }));
+                }
+            }
+        }
+    } else {
+        // Timer was NOT running - this is normal startup
+        println!("[crash-recovery] Timer was not running, normal startup");
+    }
+}
+
+/// Spawns a thread that records timestamps every 5 seconds
+pub fn spawn_timestamp_thread(app_handle: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            
+            let local_store = app_handle.state::<LocalTimeStorage>();
+            let timer_state = app_handle.state::<TimerState>();
+            
+            // Get running task and elapsed time
+            let (task_id, elapsed) = {
+                if let Ok(s) = timer_state.inner().lock() {
+                    if let Some(id) = s.running_task_id {
+                        let elapsed = s.timer_started_at
+                            .map(|started| (chrono::Utc::now() - started).num_seconds().max(0))
+                            .unwrap_or(0);
+                        (Some(id), elapsed)
+                    } else {
+                        (None, 0)
+                    }
+                } else {
+                    (None, 0)
+                }
+            };
+            
+            // Record timestamp
+            if let Some(id) = task_id {
+                local_store.add_timestamp(id, elapsed);
+                println!("[timestamp] Recorded: task_id={}, elapsed={}s", id, elapsed);
             }
         }
     });
@@ -197,5 +350,8 @@ pub fn spawn_sync_thread(app_handle: AppHandle) {
 /// Helper to read the current auth token
 fn get_token(app_handle: &AppHandle) -> Option<String> {
     let auth = app_handle.state::<AuthToken>();
-    auth.inner().lock().ok().and_then(|s| s.access_token.clone())
+    auth.inner()
+        .lock()
+        .ok()
+        .and_then(|s| s.access_token.clone())
 }

@@ -47,12 +47,18 @@ pub type ActivityState = StdMutex<ActivityTracker>;
 /// Helper to read the current auth token
 fn get_token(app_handle: &tauri::AppHandle) -> Option<String> {
     let auth = app_handle.state::<AuthToken>();
-    auth.inner().lock().ok().and_then(|s| s.access_token.clone())
+    auth.inner()
+        .lock()
+        .ok()
+        .and_then(|s| s.access_token.clone())
 }
 
 pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64) {
     std::thread::spawn(move || {
-        eprintln!("[idle] Idle monitor thread started (threshold={}s)", idle_threshold_secs);
+        eprintln!(
+            "[idle] Idle monitor thread started (threshold={}s)",
+            idle_threshold_secs
+        );
 
         // Reuse a single D-Bus connection for the lifetime of this thread
         let conn = match Connection::new_session() {
@@ -81,17 +87,14 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                 "/org/gnome/Mutter/IdleMonitor/Core",
                 Duration::from_millis(2000),
             );
-            let idle_ms: u64 = match proxy.method_call(
-                "org.gnome.Mutter.IdleMonitor",
-                "GetIdletime",
-                (),
-            ) {
-                Ok((ms,)) => ms,
-                Err(e) => {
-                    eprintln!("[idle] D-Bus GetIdletime failed: {}", e);
-                    continue;
-                }
-            };
+            let idle_ms: u64 =
+                match proxy.method_call("org.gnome.Mutter.IdleMonitor", "GetIdletime", ()) {
+                    Ok((ms,)) => ms,
+                    Err(e) => {
+                        eprintln!("[idle] D-Bus GetIdletime failed: {}", e);
+                        continue;
+                    }
+                };
 
             let system_idle_secs = idle_ms / 1000;
             let user_is_active = system_idle_secs < POLL_INTERVAL_SECS + 1;
@@ -170,7 +173,8 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                         system_idle_secs
                     );
 
-                    idle_started_at = Some(Utc::now() - chrono::Duration::seconds(system_idle_secs as i64));
+                    idle_started_at =
+                        Some(Utc::now() - chrono::Duration::seconds(system_idle_secs as i64));
                     is_idle = true;
 
                     // Read timer state and stop if running
@@ -180,7 +184,8 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                         match timer_state.inner().lock() {
                             Ok(s) => {
                                 if let Some(task_id) = s.running_task_id {
-                                    let task_name = s.cached_tasks
+                                    let task_name = s
+                                        .cached_tasks
                                         .iter()
                                         .find(|t| t.id == task_id)
                                         .map(|t| t.name.clone())
@@ -199,10 +204,7 @@ pub fn spawn_idle_monitor(app_handle: tauri::AppHandle, idle_threshold_secs: u64
                     };
 
                     if let Some((task_id, task_name)) = task_info {
-                        eprintln!(
-                            "[idle] Stopping timer for task {}: {}",
-                            task_id, task_name
-                        );
+                        eprintln!("[idle] Stopping timer for task {}: {}", task_id, task_name);
 
                         let token = get_token(&app_handle);
 

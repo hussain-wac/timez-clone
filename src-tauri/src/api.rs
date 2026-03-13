@@ -3,8 +3,8 @@ use std::net::TcpListener;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use serde::Deserialize;
 use crate::models::{AuthResponse, Task};
+use serde::Deserialize;
 
 const BASE_URL: &str = "http://192.168.3.163:8000";
 
@@ -84,7 +84,9 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
         req = req.set("Authorization", &header);
     }
     let resp = req.call().map_err(|e| format!("API error: {}", e))?;
-    let api_tasks: Vec<ApiTask> = resp.into_json().map_err(|e| format!("Parse error: {}", e))?;
+    let api_tasks: Vec<ApiTask> = resp
+        .into_json()
+        .map_err(|e| format!("Parse error: {}", e))?;
 
     // Get elapsed times from summary report
     let summary = get_summary(token).unwrap_or(SummaryReport {
@@ -127,21 +129,81 @@ pub fn list_tasks(token: &Option<String>) -> Result<Vec<Task>, String> {
     Ok(tasks)
 }
 
-pub fn start_timer(task_id: i64, token: &Option<String>) -> Result<(), String> {
+pub fn start_timer(
+    task_id: i64,
+    client_started_at: &str,
+    token: &Option<String>,
+) -> Result<(), String> {
     let mut req = ureq::post(&format!("{}/api/tasks/{}/start", BASE_URL, task_id));
     if let Some(header) = auth_header(token) {
         req = req.set("Authorization", &header);
     }
-    req.call().map_err(|e| format!("API error: {}", e))?;
+    req = req.set("Content-Type", "application/json");
+    let body = serde_json::json!({
+        "client_started_at": client_started_at
+    });
+    req.send_json(body)
+        .map_err(|e| format!("API error: {}", e))?;
     Ok(())
 }
 
-pub fn stop_timer(task_id: i64, token: &Option<String>) -> Result<(), String> {
+pub fn stop_timer(
+    task_id: i64,
+    client_stopped_at: &str,
+    token: &Option<String>,
+) -> Result<(), String> {
     let mut req = ureq::post(&format!("{}/api/tasks/{}/stop", BASE_URL, task_id));
     if let Some(header) = auth_header(token) {
         req = req.set("Authorization", &header);
     }
-    req.call().map_err(|e| format!("API error: {}", e))?;
+    req = req.set("Content-Type", "application/json");
+    let body = serde_json::json!({
+        "client_stopped_at": client_stopped_at
+    });
+    req.send_json(body)
+        .map_err(|e| format!("API error: {}", e))?;
+    Ok(())
+}
+
+pub fn crash_recovery(
+    task_id: i64,
+    client_last_stopped_at: &str,
+    token: &Option<String>,
+) -> Result<(), String> {
+    let mut req = ureq::post(&format!("{}/api/tasks/crash-recovery", BASE_URL));
+    if let Some(header) = auth_header(token) {
+        req = req.set("Authorization", &header);
+    }
+    req = req.set("Content-Type", "application/json");
+    let body = serde_json::json!({
+        "task_id": task_id,
+        "client_last_stopped_at": client_last_stopped_at
+    });
+    req.send_json(body)
+        .map_err(|e| format!("API error: {}", e))?;
+    Ok(())
+}
+
+pub fn sync_time(
+    task_id: i64,
+    elapsed_seconds: i64,
+    client_started_at: &str,
+    client_stopped_at: Option<&str>,
+    token: &Option<String>,
+) -> Result<(), String> {
+    let mut req = ureq::post(&format!("{}/api/tasks/sync-time", BASE_URL));
+    if let Some(header) = auth_header(token) {
+        req = req.set("Authorization", &header);
+    }
+    req = req.set("Content-Type", "application/json");
+    let body = serde_json::json!({
+        "task_id": task_id,
+        "elapsed_seconds": elapsed_seconds,
+        "client_started_at": client_started_at,
+        "client_stopped_at": client_stopped_at
+    });
+    req.send_json(body)
+        .map_err(|e| format!("API error: {}", e))?;
     Ok(())
 }
 
@@ -176,11 +238,15 @@ struct GoogleTokenResponse {
 /// 3. Wait for the redirect with the auth code
 /// 4. Exchange the code for an ID token
 /// 5. Send the ID token to our FastAPI backend
-pub fn google_oauth_via_browser(client_id: &str, client_secret: &str) -> Result<AuthResponse, String> {
+pub fn google_oauth_via_browser(
+    client_id: &str,
+    client_secret: &str,
+) -> Result<AuthResponse, String> {
     // 1. Bind to a random port on localhost
     let listener = TcpListener::bind("127.0.0.1:0")
         .map_err(|e| format!("Failed to start local server: {}", e))?;
-    let port = listener.local_addr()
+    let port = listener
+        .local_addr()
         .map_err(|e| format!("Failed to get local address: {}", e))?
         .port();
     let redirect_uri = format!("http://127.0.0.1:{}", port);
@@ -195,8 +261,7 @@ pub fn google_oauth_via_browser(client_id: &str, client_secret: &str) -> Result<
          redirect_uri={}&\
          response_type=code&\
          scope=email%20profile%20openid&\
-         access_type=offline&\
-         prompt=consent",
+         access_type=offline",
         urlencod(client_id),
         urlencod(&redirect_uri),
     );
@@ -204,7 +269,10 @@ pub fn google_oauth_via_browser(client_id: &str, client_secret: &str) -> Result<
     // 3. Open system browser
     open::that(&auth_url).map_err(|e| format!("Failed to open browser: {}", e))?;
 
-    eprintln!("[auth] Waiting for Google OAuth callback on port {}...", port);
+    eprintln!(
+        "[auth] Waiting for Google OAuth callback on port {}...",
+        port
+    );
 
     // 4. Wait for the callback (with 2-minute timeout)
     listener
@@ -244,13 +312,15 @@ pub fn google_oauth_via_browser(client_id: &str, client_secret: &str) -> Result<
 /// and sends a nice HTML response to the browser.
 fn wait_for_auth_code(listener: &TcpListener) -> Result<String, String> {
     // Accept one connection (blocking, with timeout via socket option)
-    let (mut stream, _) = listener.accept()
+    let (mut stream, _) = listener
+        .accept()
         .map_err(|e| format!("Failed to accept connection: {}", e))?;
 
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
     let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)
+    let n = stream
+        .read(&mut buf)
         .map_err(|e| format!("Failed to read request: {}", e))?;
     let request = String::from_utf8_lossy(&buf[..n]);
 

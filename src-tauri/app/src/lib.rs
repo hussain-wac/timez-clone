@@ -1,5 +1,5 @@
-mod ipc;
 mod instance;
+mod ipc;
 
 use std::time::Duration;
 
@@ -7,7 +7,8 @@ use ipc::ServiceManager;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, State, UserAttentionType};
+use tauri::{Emitter, Manager, State};
+use timez_core::api;
 use timez_core::models::{ActivityStats, AuthResponse, AuthUser, IdleEvent, Task, TimerStatus};
 use timez_core::protocol::Request;
 
@@ -26,7 +27,8 @@ pub fn run() {
             app.manage(service);
 
             let show_item = MenuItemBuilder::with_id("show", "Show Window").build(app)?;
-            let toggle_item = MenuItemBuilder::with_id("toggle_timer", "Pause/Resume Task").build(app)?;
+            let toggle_item =
+                MenuItemBuilder::with_id("toggle_timer", "Pause/Resume Task").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show_item)
@@ -53,7 +55,10 @@ pub fn run() {
                     }
                     "toggle_timer" => {
                         let service = app.state::<ServiceManager>();
-                        match service.send(Request::GetStatus).and_then(ipc::decode_status) {
+                        match service
+                            .send(Request::GetStatus)
+                            .and_then(ipc::decode_status)
+                        {
                             Ok(status) if status.running => {
                                 if service
                                     .send(Request::StopTimer)
@@ -73,7 +78,10 @@ pub fn run() {
                                     .find(|task| task.running)
                                     .map(|task| task.id)
                                     .or_else(|| {
-                                        tasks.iter().max_by_key(|task| task.elapsed_secs).map(|task| task.id)
+                                        tasks
+                                            .iter()
+                                            .max_by_key(|task| task.elapsed_secs)
+                                            .map(|task| task.id)
                                     });
                                 if let Some(task_id) = task_id {
                                     let _ = service
@@ -100,7 +108,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" && matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
                 let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                     unreachable!();
                 };
@@ -131,12 +141,9 @@ pub fn run() {
 
 fn focus_main_window<R: tauri::Runtime, M: Manager<R>>(manager: &M) {
     if let Some(window) = manager.get_webview_window("main") {
-        let _ = window.set_visible_on_all_workspaces(true);
-        let _ = window.set_always_on_top(true);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.request_user_attention(Some(UserAttentionType::Critical));
     }
 }
 
@@ -144,20 +151,11 @@ fn maintain_idle_window_state<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R
     if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_visible_on_all_workspaces(true);
         let _ = window.set_focus();
-        let _ = window.request_user_attention(Some(UserAttentionType::Critical));
     }
 }
 
-fn clear_idle_window_state<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
-    if let Some(window) = app_handle.get_webview_window("main") {
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_visible_on_all_workspaces(false);
-        let _ = window.request_user_attention(None);
-    }
-}
+fn clear_idle_window_state<R: tauri::Runtime>(_app_handle: &tauri::AppHandle<R>) {}
 
 fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
     std::thread::spawn(move || {
@@ -208,7 +206,10 @@ fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
                 }
             }
 
-            if let Ok(status) = service.send(Request::GetStatus).and_then(ipc::decode_status) {
+            if let Ok(status) = service
+                .send(Request::GetStatus)
+                .and_then(ipc::decode_status)
+            {
                 if status.running != last_running {
                     update_app_running_icon(&app_handle, status.running);
                 }
@@ -221,7 +222,10 @@ fn spawn_event_bridge<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) {
     });
 }
 
-fn request(service: State<'_, ServiceManager>, request: Request) -> Result<timez_core::protocol::ResponseData, String> {
+fn request(
+    service: State<'_, ServiceManager>,
+    request: Request,
+) -> Result<timez_core::protocol::ResponseData, String> {
     service.send(request)
 }
 
@@ -266,7 +270,10 @@ fn add_idle_time(
 }
 
 #[tauri::command]
-fn discard_idle_time(task_id: i64, service: State<'_, ServiceManager>) -> Result<Vec<Task>, String> {
+fn discard_idle_time(
+    task_id: i64,
+    service: State<'_, ServiceManager>,
+) -> Result<Vec<Task>, String> {
     ipc::decode_tasks(request(service, Request::DiscardIdleTime { task_id })?)
 }
 
@@ -290,10 +297,7 @@ fn google_login(
     google_id_token: String,
     service: State<'_, ServiceManager>,
 ) -> Result<AuthResponse, String> {
-    ipc::decode_auth_response(request(
-        service,
-        Request::GoogleLogin { google_id_token },
-    )?)
+    ipc::decode_auth_response(request(service, Request::GoogleLogin { google_id_token })?)
 }
 
 #[tauri::command]
@@ -301,17 +305,22 @@ fn start_google_auth(
     client_id: String,
     client_secret: String,
     app_handle: tauri::AppHandle,
-    service: State<'_, ServiceManager>,
-) -> Result<AuthResponse, String> {
-    let response = ipc::decode_auth_response(request(
-        service,
-        Request::StartGoogleAuth {
-            client_id,
-            client_secret,
-        },
-    )?)?;
-    focus_main_window(&app_handle);
-    Ok(response)
+) -> Result<String, String> {
+    std::thread::spawn(move || {
+        let result = api::google_oauth_via_browser(&client_id, &client_secret);
+
+        match result {
+            Ok(response) => {
+                let _ = ipc::send_auth_login(&response.access_token);
+                let _ = app_handle.emit("auth-success", &response);
+            }
+            Err(e) => {
+                let _ = app_handle.emit("auth-error", &e);
+            }
+        }
+    });
+
+    Ok("OAuth started".to_string())
 }
 
 #[tauri::command]
@@ -325,7 +334,10 @@ fn logout(service: State<'_, ServiceManager>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn quit_app(app_handle: tauri::AppHandle, service: State<'_, ServiceManager>) -> Result<(), String> {
+fn quit_app(
+    app_handle: tauri::AppHandle,
+    service: State<'_, ServiceManager>,
+) -> Result<(), String> {
     service.shutdown();
     app_handle.exit(0);
     Ok(())
@@ -430,7 +442,8 @@ fn draw_thick_line(
         for x in min_x.saturating_sub(4)..=(max_x + 4).min(size - 1) {
             let px = x as f32 + 0.5;
             let py = y as f32 + 0.5;
-            let t = (((px - start.0) * line_dx + (py - start.1) * line_dy) / len_sq).clamp(0.0, 1.0);
+            let t =
+                (((px - start.0) * line_dx + (py - start.1) * line_dy) / len_sq).clamp(0.0, 1.0);
             let proj_x = start.0 + t * line_dx;
             let proj_y = start.1 + t * line_dy;
             let dx = px - proj_x;
