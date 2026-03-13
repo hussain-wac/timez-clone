@@ -351,11 +351,24 @@ fn wait_for_auth_code(listener: &TcpListener) -> Result<String, String> {
     let code = extract_query_param(path, "code")
         .ok_or_else(|| "No authorization code in callback".to_string())?;
 
-    // Send a success page to the browser
-    let html = "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>\
-        <h2 style='color:#7c3aed'>Authentication Successful</h2>\
-        <p style='color:#666'>You can close this tab and return to the app.</p>\
-        <script>setTimeout(()=>window.close(),2000)</script></body></html>";
+    // Send a success page to the browser with auto-launch
+    let html = r#"<html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 60px; background: #f5f5f5; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; margin: 0 auto; }
+            h2 { color: #7c3aed; margin-bottom: 16px; }
+            p { color: #666; margin-bottom: 24px; }
+            .btn { background: #7c3aed; color: white; padding: 14px 28px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
+            .btn:hover { background: #6d28d9; }
+        </style>
+    </head><body>
+        <div class="card">
+            <h2>Authentication Successful!</h2>
+            <p>Click below to open Timez Pro</p>
+            <button class="btn" onclick="window.location.href='timezpro://'">Open Timez Pro</button>
+        </div>
+    </body></html>"#;
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         html.len(),

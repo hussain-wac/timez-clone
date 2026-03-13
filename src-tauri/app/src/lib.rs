@@ -19,7 +19,14 @@ const TRAY_ID: &str = "main-tray";
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                app.deep_link().register("timezpro").ok();
+            }
+
             instance::spawn_show_listener(app.handle().clone())?;
 
             let service = ServiceManager::new();
